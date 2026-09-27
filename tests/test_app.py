@@ -1,5 +1,6 @@
 import io
 import json
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 import socket
@@ -89,7 +90,8 @@ class AppTests(unittest.TestCase):
                  patch.object(app.time, 'sleep'), patch.object(app, 'start_helper') as helper, \
                  patch.object(app, 'pinned_guest_ssh', return_value=['ssh','guest']), \
                  patch.object(app.subprocess, 'call', return_value=0) as shell:
-                self.assertEqual(app.terminal(SimpleNamespace(probe=None)), 0)
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(app.terminal(SimpleNamespace(probe=None)), 0)
                 helper.assert_not_called()
                 shell.assert_called_once_with(['ssh','guest'])
 
