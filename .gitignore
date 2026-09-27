@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+state/
+runtime/
+*.deb
+*.qcow2
+*.img
+*.iso
+*.exe
+*.msi
+*.zip
+*.log
+gateway/gateway
+*.spec

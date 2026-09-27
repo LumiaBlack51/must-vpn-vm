@@ -1,0 +1,41 @@
+#!/bin/bash
+set -euo pipefail
+# Refuse WSL, containers, and ordinary Linux installations.
+[[ $(cat /sys/class/dmi/id/product_name) == MUSTVPN-Isolated ]] || { echo 'Dedicated MUST VM required'; exit 1; }
+[[ -f /etc/must-vm ]] || exit 1
+case "${1:-status}" in
+  install)
+    # This command is only executed by the user inside the dedicated VM.
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends iptables iproute2 ca-certificates lsb-release \
+      libnss3 libnspr4 libdbus-1-3 libx11-6 libxcb1 libxkbcommon0 libxrender1 \
+      libxext6 libxi6 libxtst6 libglib2.0-0t64 libfontconfig1 libfreetype6 \
+      libx11-xcb1 libxcb-xinerama0 libxcb-render0 libxcb-shape0 libxcb-xfixes0 \
+      libice6 libsm6 libgl1 libegl1 libxkbcommon-x11-0 libasound2t64
+    mkdir -p /mnt/must-seed
+    mountpoint -q /mnt/must-seed || mount -o ro /dev/disk/by-label/cidata /mnt/must-seed
+    cd /mnt/must-seed
+    sha256sum -c vendor.sha256
+    # Prevent automatic service startup during package configuration.
+    test ! -e /usr/sbin/policy-rc.d || { echo 'Existing policy-rc.d; refusing to overwrite'; exit 1; }
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+    chmod 755 /usr/sbin/policy-rc.d
+    trap 'rm -f /usr/sbin/policy-rc.d' EXIT
+    systemctl mask aTrustDaemon.service
+    dpkg -i /mnt/must-seed/vendor.deb
+    systemctl disable aTrustDaemon.service || true
+    echo 'Installed in VM. Run must-vpn start when ready to authenticate.'
+    ;;
+  start)
+    systemctl unmask aTrustDaemon.service
+    systemctl start aTrustDaemon.service
+    ;;
+  stop) systemctl stop aTrustDaemon.service ;;
+  status)
+    systemctl --no-pager status aTrustDaemon.service || true
+    ip -brief address
+    ss -lnt
+    ;;
+  *) echo 'Usage: sudo must-vpn {install|start|stop|status}'; exit 2 ;;
+esac
