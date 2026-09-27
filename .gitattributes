@@ -1,0 +1,7 @@
+* text=auto
+*.py text eol=lf
+*.go text eol=lf
+*.sh text eol=lf
+guest/must-vpn text eol=lf
+*.yml text eol=lf
+*.json text eol=lf

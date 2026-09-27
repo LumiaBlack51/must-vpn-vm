@@ -3,6 +3,27 @@ set -euo pipefail
 # Refuse WSL, containers, and ordinary Linux installations.
 [[ $(cat /sys/class/dmi/id/product_name) == MUSTVPN-Isolated ]] || { echo 'Dedicated MUST VM required'; exit 1; }
 [[ -f /etc/must-vm ]] || exit 1
+ensure_units() {
+  mkdir -p /etc/systemd/system/aTrustDaemon.service.d
+  printf '[Service]\nKillMode=control-group\nTimeoutStopSec=10\n' > /etc/systemd/system/aTrustDaemon.service.d/isolation.conf
+  cat > /etc/systemd/system/must-vpn-core.service <<'EOF'
+[Unit]
+Description=MUST VM headless aTrust authentication core
+Requires=aTrustDaemon.service
+After=aTrustDaemon.service
+PartOf=aTrustDaemon.service
+[Service]
+Type=simple
+WorkingDirectory=/usr/share/sangfor/aTrust/resources/bin
+Environment=QT_QPA_PLATFORM=offscreen
+ExecStart=/usr/share/sangfor/aTrust/resources/bin/aTrustAgent --plugin plugins/aTrustCore --enable-http --enable-event-center
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
+EOF
+  systemctl daemon-reload
+}
 case "${1:-status}" in
   install)
     # This command is only executed by the user inside the dedicated VM.
@@ -12,7 +33,7 @@ case "${1:-status}" in
       libnss3 libnspr4 libdbus-1-3 libx11-6 libxcb1 libxkbcommon0 libxrender1 \
       libxext6 libxi6 libxtst6 libglib2.0-0t64 libfontconfig1 libfreetype6 \
       libx11-xcb1 libxcb-xinerama0 libxcb-render0 libxcb-shape0 libxcb-xfixes0 \
-      libice6 libsm6 libgl1 libegl1 libxkbcommon-x11-0 libasound2t64
+      libice6 libsm6 libgl1 libegl1 libxkbcommon-x11-0 libasound2t64 libproxy1v5 libharfbuzz0b
     mkdir -p /mnt/must-seed
     mountpoint -q /mnt/must-seed || mount -o ro /dev/disk/by-label/cidata /mnt/must-seed
     cd /mnt/must-seed
@@ -25,15 +46,33 @@ case "${1:-status}" in
     systemctl mask aTrustDaemon.service
     dpkg -i /mnt/must-seed/vendor.deb
     systemctl disable aTrustDaemon.service || true
+    ensure_units
+    apt-get clean
     echo 'Installed in VM. Run must-vpn start when ready to authenticate.'
     ;;
   start)
+    if ldd /usr/share/sangfor/aTrust/resources/bin/aTrustAgent | grep 'not found'; then
+      echo 'Missing client libraries. Run must-vpn install again.'; exit 1
+    fi
+    ensure_units
     systemctl unmask aTrustDaemon.service
-    systemctl start aTrustDaemon.service
+    systemctl start aTrustDaemon.service must-vpn-core.service
+    python3 - <<'PY'
+import socket, ssl, time
+ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname=False
+ctx.verify_mode=ssl.CERT_NONE
+for _ in range(30):
+    try:
+        with ctx.wrap_socket(socket.create_connection(('127.0.0.1',54630),timeout=2),server_hostname='localhost'): break
+    except OSError: time.sleep(1)
+else: raise SystemExit('aTrust authentication interface did not become ready')
+PY
+    systemctl is-active --quiet aTrustDaemon.service || { systemctl --no-pager status aTrustDaemon.service; exit 1; }
     ;;
-  stop) systemctl stop aTrustDaemon.service ;;
+  stop) systemctl stop must-vpn-core.service aTrustDaemon.service ;;
   status)
-    systemctl --no-pager status aTrustDaemon.service || true
+    SYSTEMD_COLORS=0 SYSTEMD_URLIFY=0 systemctl --no-pager status aTrustDaemon.service must-vpn-core.service || true
     ip -brief address
     ss -lnt
     ;;

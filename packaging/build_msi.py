@@ -8,7 +8,7 @@ import xml.etree.ElementTree as X
 p=argparse.ArgumentParser();p.add_argument('--wix',required=True,type=Path);p.add_argument('--stage',required=True,type=Path);p.add_argument('--out',required=True,type=Path);a=p.parse_args()
 ns='http://schemas.microsoft.com/wix/2006/wi';X.register_namespace('',ns)
 def node(parent,tag,**attrs):return X.SubElement(parent,'{'+ns+'}'+tag,attrs)
-root=X.Element('{'+ns+'}Wix');product=node(root,'Product',Id='*',Name='MUST VPN VM (Preview)',Language='1033',Version='0.1.0',Manufacturer='MUST VM Project',UpgradeCode='71F289BB-C190-4937-BEB7-0F541BC89105')
+root=X.Element('{'+ns+'}Wix');product=node(root,'Product',Id='*',Name='MUST VPN VM (Preview)',Language='1033',Version='0.1.1',Manufacturer='MUST VM Project',UpgradeCode='71F289BB-C190-4937-BEB7-0F541BC89105')
 node(product,'Package',InstallerVersion='500',Compressed='yes',InstallScope='perUser',Platform='x64')
 node(product,'MajorUpgrade',DowngradeErrorMessage='A newer MUST VPN VM is installed.')
 node(product,'MediaTemplate',EmbedCab='yes',CompressionLevel='high')

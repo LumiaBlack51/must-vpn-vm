@@ -11,9 +11,18 @@ import app
 
 
 class AppTests(unittest.TestCase):
+    def test_browser_blocks_external_application_launch(self):
+        args=app.browser_args('browser',1088,'https://vpn.must.edu.mo/','fixture-key')
+        self.assertIn('--disable-external-intent-requests',args)
+        self.assertIn('--proxy-bypass-list=<-loopback>',args)
+        self.assertIn('--disable-quic',args)
+        self.assertIn('--ignore-certificate-errors-spki-list=fixture-key',args)
+        self.assertNotIn('--ignore-certificate-errors',args)
+
     def test_qemu_has_only_explicit_gateway(self):
         args = app.qemu_args(dict(qemu='qemu', accelerator='tcg', memory=768), '127.0.0.1:1234')
         self.assertIn('-nodefaults', args)
+        self.assertIn('tcg,tb-size=32,thread=single',args)
         self.assertIn('socket,id=direct,connect=127.0.0.1:1234', args)
         self.assertFalse(any('user,id=' in a or 'hostfwd' in a for a in args))
         self.assertIn('none', args)

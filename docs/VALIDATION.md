@@ -1,13 +1,48 @@
 # 验证记录
 
-开发中；最后交付前更新真实结果。学校账号、扫码和校内资源访问需要用户完成。
+2026-09-27，Windows 11 x64 开发机实测。用户已亲自在隔离浏览器中完成扫码并报告登录成功。
 
-## 必须覆盖的验收
+## 已通过
 
-- Windows TCG 无 VPN 启动、固定主机密钥 SSH、来宾 DNS、TCP/UDP 出口。
-- Clash TUN 开启时，通过网关的连接源地址/接口为选定物理网卡。
-- 正常扫码登录，学校授权资源可达，宿主 Clash 仍可正常使用。
-- 断开物理网卡后网关退出，不走 Clash 或其他默认网络。
+- 原始 DEB 移动后 SHA-256 与 runtime-lock.json 一致；只静态解包，没有在 Windows
+  或 WSL 安装/启动厂商 VPN。WSL 仅用于编译 Linux 版本。
+- 6 个 Python 测试、4 个 Go 测试；GitHub Actions 的 Windows / Ubuntu 首轮测试通过。
+- TCG 启动 Ubuntu Minimal；云初始化读取 virtio 只读 seed；固定 SSH 主机密钥认证通过。
+- 来宾 DNS 查询成功、HTTPS example.com 返回 200。
+- 宿主 curl → SOCKS5 → SSH → 来宾 → 用户态物理出口，HTTPS 返回 200。
+- Meta Tunnel 为 Up 且有默认路由的同时，网关 TCP 连接的源 IPv4 是 WLAN 的物理地址。
+  这是本机样本的验证，不代表所有 WFP 驱动组合。
+- 来宾安装 aTrust 2.5.16.30 成功（dpkg --audit 无输出）。桌面相关安装脚本产生非致命
+  警告；首次缺少 libproxy / libharfbuzz，已补进来宾安装依赖。
+- 显式启动守护服务和独立认证核心后，54630 / 54631 等认证接口监听；无 Electron、
+  Xorg、Xvfb。经 SSH 读取到了本地 API 的证书公钥。
+- HTTP `/v1/service/status` 未认证探测返回 503；仅证明代理链到达接口，**不代表认证成功**。
+- 更新 KillMode 后停止客户端，`ps` 未发现残留 aTrust 进程；正常来宾关机成功。
+- 登录后，来宾出现 utun7 和学校下发的资源路由；宿主 WLAN / Meta 均仍为 Up，
+  经隔离代理的普通 HTTPS 仍返回 200。没有启动 Windows 本机的 aTrust。
+- Windows 初版 MSI 真实安装返回 0，安装后启动器和精简 QEMU 可以运行。
+- Ubuntu 原生打包成功，dpkg-deb 元数据检查通过，冻结后的 Linux 启动器 `--help` 可运行。
+- 512 MiB 来宾配置完成重启和真实扫码登录；最终仍保留 768 MiB 默认配置以留出认证峰值余量。
+- QMP 预启动探测确认本机 WHPX 可初始化；`tcg,tb-size=32,thread=single` 参数可正常初始化。
+
+## 资源样本
+
+768 MiB 配置、1 vCPU、TCG：无 VPN 的来宾 `free -m` used 约 216 MiB；
+守护进程和认证核心运行、尚未登录时约 268–287 MiB。
+同一无 VPN 样本中，Windows QEMU 工作集约 767 MiB，网关约 53 MiB，另外还有
+启动器及按需浏览器。来宾 used 不能当作整套软件的宿主内存。
+后续 512 MiB 样本登录后 guest used 约 190 MiB；但未限制的 TCG 翻译缓存让 QEMU
+宿主工作集增长到约 1.43 GiB。因此最终代码显式限制 TCG 缓存 32 MiB，并优先使用可用
+的硬件加速。最终组合的长期工作集还需要持续测量，不能宣传成 190 MiB 总内存。
+
+Windows 初版 MSI 约 291 MiB（带 QEMU 和基础镜像），Linux 包约 15 MiB（不带它们）。
+6 GiB 是来宾磁盘容量上限，不是下载大小或即时实际占用。
+
+## 尚未完成的验收
+
+- 指定的学校授权内网资源可达性（扫码和隧道建立已经验证）。
+- 真实断网后 fail-closed（仅做了无效网卡拒绝测试，未为测试断开宿主 WLAN）。
 - 退出与重连、VPN 更新、不同 Windows 版本、Linux KVM。
+- Windows ARM、受管理的浏览器策略、认证高峰内存以及纯校内网络表现。
 
 源码测试不能替代真实 VPN 验收，也不能证明任意 WFP 拦截场景可用。

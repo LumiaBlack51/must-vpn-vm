@@ -4,8 +4,8 @@
 当前实现为命令行软件，来宾系统为 Ubuntu Minimal 24.04 amd64，无桌面、无浏览器。
 学校扫码登录使用宿主机独立的 Chromium / Edge 配置目录。
 
-**状态：需要学校账号完成端到端认证验收。不能承诺所有 Windows 电脑、所有
-Clash/WFP 驱动、所有学校认证策略都兼容。** 详见 [验证记录](docs/VALIDATION.md)。
+**状态：用户已完成真实扫码登录，来宾隧道建立；具体内网资源访问仍待验收。不能承诺所有
+Windows 电脑、Clash/WFP 驱动和学校认证策略都兼容。** 详见 [验证记录](docs/VALIDATION.md)。
 
 ## 网络结构
 
@@ -29,9 +29,10 @@ QEMU 没有默认 NAT、TAP、宿主共享目录或默认网卡。网关不使�
 ## Windows 使用
 
 目标平台：Windows 10/11 x64。MSI 按用户安装，自带 Python、网关、QEMU x86_64
-和 Ubuntu 基础镜像。不要求 Docker、WSL 或 Hyper-V；默认 TCG 软件模拟适配面较广，
-速度较慢。已启用 Windows Hypervisor Platform 时可选择 `--accelerator whpx`，
-程序不会替你修改系统功能或重启。ARM Windows 尚未验证。
+和 Ubuntu 基础镜像。不要求 Docker 或 WSL；默认 auto 优先使用已可用的 WHPX（Linux KVM），
+不可用则回退 TCG 软件模拟，后者速度较慢。TCG 翻译缓存限制为 32 MiB，避免默认大缓存
+持续抬高宿主内存。可以明确选择 `--accelerator tcg` / `whpx`；
+程序不会替你启用系统功能或重启。ARM Windows 尚未验证。
 
 安装 MSI 后重新打开终端（或进入 `%LOCALAPPDATA%\MUST VPN VM App`）：
 
@@ -54,11 +55,18 @@ must-vm browser
   导入的原始 DEB。需要物理网络可访问 Ubuntu 软件源。绝不在宿主调用 dpkg 或厂商程序。
 * `browser` 使用独立浏览器目录、SOCKS5 和 `<-loopback>`，把学校门户对 localhost
   客户端接口的检测送进来宾。扫码、验证码、MFA 由用户按学校正常流程完成。
-  如果门户强制自定义协议 `atrust://` 或其他不可代理的检测，当前浏览器桥接可能不兼容。
-  不把宿主机现有 aTrust 当作回退客户端。
+  浏览器加 `--disable-external-intent-requests` 阻止网页启动宿主外部应用；若浏览器不支持
+  该 Chromium 参数，不要允许“打开 aTrust”提示。如果门户强制自定义协议 `atrust://`
+  或其他不可代理的检测，当前浏览器桥接可能不兼容，不以宿主 aTrust 作为回退。
+  客户端本地 HTTPS 证书的公钥通过已固定主机密钥的 SSH 读取，仅为这个独立浏览器进程
+  配置该公钥的证书例外；不导入宿主根证书、不全局关闭 TLS 检查。原厂证书序列号为 0，
+  目前固定使用兼容的 cryptography 48.0.1。
 * 校内应用显式配置 `socks5h://127.0.0.1:1088`。普通应用和 Clash 不受本工具配置影响。
   只有 TCP CONNECT；主机侧 SOCKS 不支持 UDP ASSOCIATE（来宾出口支持 UDP）。
 * `must-vm proxy` 只启动代理，不打开浏览器。`--port` 可换端口。
+* 不支持 SOCKS 的 SSH 客户端可以先运行 `must-vm forward 校内服务器IP:22 --port 2222`，
+  再在另一终端运行 `ssh -o HostKeyAlias=校内服务器IP -p 2222 用户名@127.0.0.1`。
+  这样密码由系统 SSH 直接询问，不交给本工具保存；HostKeyAlias 复用服务器的已知主机密钥。
 * `must-vm exec 'free -m; ip route'` 在来宾执行诊断命令。
 * `must-vm shutdown` 正常关机；`run` 窗口 Ctrl+C 是强制停止，仅适合故障处理。
   主进程崩溃时不保证来宾正常关机，重启前确认旧 QEMU 已结束。
@@ -75,7 +83,7 @@ must-vm browser
 
 ## Ubuntu 宿主版本
 
-目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.1.0_amd64.deb` 后：
+目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.1.1_amd64.deb` 后：
 
 ```sh
 must-vm adapters

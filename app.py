@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import platform
 import select
+import shlex
 import shutil
 import socket
 import struct
@@ -24,6 +25,7 @@ import paramiko
 import pycdlib
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography import x509
 
 ROOT = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 RESOURCES = Path(getattr(sys, '_MEIPASS', ROOT))
@@ -103,7 +105,7 @@ def create_seed(deb, dns):
             {'path': '/etc/sysctl.d/90-must.conf', 'content': 'net.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\n'},
         ],
         # No apt, vendor installation, vendor startup, desktop or browser at first boot.
-        'runcmd': [['systemctl', 'restart', 'ssh'], ['systemctl', 'set-default', 'multi-user.target']],
+        'runcmd': [['sysctl', '--system'], ['systemctl', 'restart', 'ssh'], ['systemctl', 'set-default', 'multi-user.target']],
         'growpart': {'mode': 'auto', 'devices': ['/'], 'ignore_growroot_disabled': False},
     }
     network = {'version': 2, 'ethernets': {'uplink': {'match': {'macaddress': '52:54:00:4d:55:53'},
@@ -154,7 +156,12 @@ def configure(args):
 
 def qemu_args(cfg, ethernet):
     def escape(p): return str(p).replace(',', ',,')
-    return [cfg['qemu'], '-name', 'MUSTVPN-Isolated', '-machine', 'q35', '-accel', cfg['accelerator'],
+    accelerator = cfg['accelerator']
+    if accelerator == 'auto':
+        acceleration = ['-accel', 'whpx' if os.name == 'nt' else 'kvm', '-accel', 'tcg,tb-size=32,thread=single']
+    else:
+        acceleration = ['-accel', 'tcg,tb-size=32,thread=single' if accelerator == 'tcg' else accelerator]
+    return [cfg['qemu'], '-name', 'MUSTVPN-Isolated', '-machine', 'q35', *acceleration,
         '-m', str(cfg['memory']), '-smp', '1', '-nodefaults', '-display', 'none', '-monitor', 'none',
         '-smbios', 'type=1,manufacturer=MUST-VM,product=MUSTVPN-Isolated,serial=ds=nocloud',
         '-drive', f'file={escape(STATE / "disk.qcow2")},if=virtio,format=qcow2,discard=unmap',
@@ -195,7 +202,11 @@ def run_vm(_):
             print('VM running. In another terminal use: must-vm status / install-vpn / start-vpn / browser')
             print('Ctrl+C stops this VM and its gateway; host networking is unchanged.')
             while vm.poll() is None and gw.poll() is None: time.sleep(0.5)
-            if vm.poll() not in (None, 0) or gw.poll() is not None:
+            if vm.poll() is None and gw.poll() is not None:
+                try: vm.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    raise ValueError('Gateway stopped; VM will be stopped without using a fallback network.')
+            if vm.poll() not in (None, 0):
                 raise ValueError('VM or gateway exited; see gateway.log and console.log.')
     finally:
         for child in reversed(children):
@@ -222,7 +233,7 @@ def connect_guest():
 def exec_guest(command):
     with connect_guest() as client:
         _, stdout, stderr = client.exec_command(command, get_pty=True)
-        for line in stdout: print(line, end='')
+        for line in stdout: print(line.replace('\r', ''), end='')
         return stdout.channel.recv_exit_status()
 
 
@@ -233,6 +244,16 @@ def exact(sock, count):
         if not piece: raise EOFError('closed')
         data.extend(piece)
     return bytes(data)
+
+
+def copy_channel(client, channel, transport):
+    client.settimeout(None)
+    while transport.is_active():
+        ready, _, _ = select.select([client, channel], [], [], 60)
+        for source in ready:
+            data = source.recv(65536)
+            if not data: return
+            (channel if source is client else client).sendall(data)
 
 
 def socks_client(client, transport):
@@ -252,14 +273,7 @@ def socks_client(client, transport):
         # Guest resolves domain names and routes local API requests, never the host resolver.
         channel = transport.open_channel('direct-tcpip', (host, port), client.getpeername(), timeout=15)
         client.sendall(b'\x05\x00\x00\x01'+b'\x00'*6)
-        client.settimeout(None)
-        while True:
-            ready, _, _ = select.select([client, channel], [], [], 60)
-            if not transport.is_active(): break
-            for source in ready:
-                data = source.recv(65536)
-                if not data: return
-                (channel if source is client else client).sendall(data)
+        copy_channel(client, channel, transport)
     except (OSError, EOFError, ValueError, paramiko.SSHException):
         try: client.sendall(b'\x05\x01\x00\x01'+b'\x00'*6)
         except OSError: pass
@@ -268,11 +282,57 @@ def socks_client(client, transport):
         client.close()
 
 
+def forward(args):
+    host, port = args.target.rsplit(':',1)
+    port = int(port)
+    if not host or not 1 <= port <= 65535: raise ValueError('Expected target hostname:port')
+    with connect_guest() as guest, socket.socket() as listener:
+        listener.bind(('127.0.0.1',args.port));listener.listen(16);listener.settimeout(1)
+        print(f'127.0.0.1:{listener.getsockname()[1]} -> guest -> {host}:{port}. Ctrl+C stops forwarding.')
+        slots=threading.BoundedSemaphore(64)
+        def worker(client):
+            try:
+                with guest.get_transport().open_channel('direct-tcpip',(host,port),client.getpeername(),timeout=15) as channel:
+                    copy_channel(client,channel,guest.get_transport())
+            except (OSError,paramiko.SSHException): pass
+            finally: client.close();slots.release()
+        while guest.get_transport().is_active():
+            try: client,_=listener.accept()
+            except socket.timeout: continue
+            if not slots.acquire(blocking=False):client.close();continue
+            threading.Thread(target=worker,args=(client,),daemon=True).start()
+
+
 def browser_path():
     candidates = ([Path(os.environ.get('PROGRAMFILES(X86)', 'C:/Program Files (x86)')) / 'Microsoft/Edge/Application/msedge.exe',
                    Path(os.environ.get('PROGRAMFILES', 'C:/Program Files')) / 'Google/Chrome/Application/chrome.exe'] if os.name == 'nt'
                   else [Path(p) for name in ('chromium', 'chromium-browser', 'google-chrome') if (p := shutil.which(name))])
     return next((str(p) for p in candidates if p.is_file()), None)
+
+
+def browser_args(browser, port, portal, spki):
+    return [browser, f'--user-data-dir={STATE / "browser-profile"}',
+        f'--proxy-server=socks5://127.0.0.1:{port}', '--proxy-bypass-list=<-loopback>',
+        '--disable-external-intent-requests', '--disable-background-networking',
+        f'--ignore-certificate-errors-spki-list={spki}',
+        '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1', '--no-first-run', portal]
+
+
+def guest_api_spki(guest):
+    # Retrieve the local API certificate over the already pinned SSH connection.
+    # Trust only its public key in this browser process, never all certificates.
+    script = ('import socket,ssl,base64; '
+        'ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; '
+        's=ctx.wrap_socket(socket.create_connection(("127.0.0.1",54630),timeout=10),server_hostname="localhost"); '
+        'print(base64.b64encode(s.getpeercert(binary_form=True)).decode());s.close()')
+    _, out, err = guest.exec_command('python3 -c '+shlex.quote(script))
+    data = out.read()
+    if out.channel.recv_exit_status() != 0:
+        raise ValueError('Guest authentication API is unavailable. Run start-vpn first.')
+    cert = x509.load_der_x509_certificate(base64.b64decode(data))
+    public = cert.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return base64.b64encode(hashlib.sha256(public).digest()).decode()
 
 
 def tunnel(args):
@@ -283,10 +343,7 @@ def tunnel(args):
         if args.command == 'browser':
             browser = browser_path()
             if not browser: raise ValueError('Install Edge/Chrome/Chromium to open the isolated login browser.')
-            subprocess.Popen([browser, f'--user-data-dir={STATE / "browser-profile"}',
-                f'--proxy-server=socks5://127.0.0.1:{port}', '--proxy-bypass-list=<-loopback>',
-                '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-                '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1', '--no-first-run', config()['portal']],
+            subprocess.Popen(browser_args(browser, port, config()['portal'], guest_api_spki(guest)),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         slots = threading.BoundedSemaphore(128)
         def worker(c):
@@ -307,25 +364,29 @@ def main():
     c.add_argument('--deb', required=True); c.add_argument('--interface', required=True); c.add_argument('--source', required=True)
     c.add_argument('--dns', default='1.1.1.1'); c.add_argument('--base'); c.add_argument('--qemu')
     c.add_argument('--memory', type=int, choices=range(384, 4097), default=768, metavar='384..4096')
-    c.add_argument('--accelerator', choices=['tcg', 'whpx'] if os.name == 'nt' else ['tcg', 'kvm'], default='tcg')
+    c.add_argument('--accelerator', choices=['auto','tcg', 'whpx'] if os.name == 'nt' else ['auto','tcg', 'kvm'], default='auto')
     sub.add_parser('run')
     for name in ['status', 'install-vpn', 'start-vpn', 'stop-vpn', 'shutdown']: sub.add_parser(name)
     c = sub.add_parser('exec'); c.add_argument('guest_command')
     for name in ['browser', 'proxy']:
         c = sub.add_parser(name); c.add_argument('--port', type=int, default=1088)
+    c=sub.add_parser('forward');c.add_argument('target');c.add_argument('--port',type=int,default=2222)
     args = p.parse_args()
     if args.command == 'adapters': print(json.dumps(adapters(), indent=2, ensure_ascii=False))
     elif args.command == 'configure': configure(args)
     elif args.command == 'run': run_vm(args)
     elif args.command in ['browser', 'proxy']: tunnel(args)
+    elif args.command == 'forward': forward(args)
     else:
         commands = {'status': 'sudo must-vpn status', 'install-vpn': 'sudo must-vpn install',
-                    'start-vpn': 'sudo must-vpn start', 'stop-vpn': 'sudo must-vpn stop', 'shutdown': 'sudo poweroff'}
+                    'start-vpn': 'sudo must-vpn start', 'stop-vpn': 'sudo must-vpn stop', 'shutdown': 'sudo systemctl poweroff --no-block'}
         return exec_guest(args.guest_command if args.command == 'exec' else commands[args.command])
     return 0
 
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     try: sys.exit(main())
     except KeyboardInterrupt: print('\nStopped.'); sys.exit(130)
     except (OSError, ValueError, subprocess.SubprocessError, paramiko.SSHException) as e:

@@ -1,2 +1,4 @@
 pycdlib==1.21.0
 paramiko==5.0.0
+# aTrust's local API certificate uses serial zero; newer parsers may reject it.
+cryptography==48.0.1
