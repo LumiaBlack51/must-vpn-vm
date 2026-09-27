@@ -13,6 +13,32 @@ import app
 
 
 class AppTests(unittest.TestCase):
+    def test_windows_state_uses_profile_directory_and_preserves_legacy(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app.sys, 'platform', 'win32'), \
+             patch.object(app.Path, 'home', return_value=Path(tmp)), \
+             patch.dict(app.os.environ, {'LOCALAPPDATA': str(Path(tmp) / 'redirected')}, clear=True):
+            shared = Path(tmp) / '.must-vpn-vm'
+            self.assertEqual(app.state_home(), shared.resolve())
+            legacy = Path(tmp) / 'redirected/MUST-VPN-VM'
+            legacy.mkdir(parents=True)
+            self.assertEqual(app.state_home(), legacy.resolve())
+            shared.mkdir()
+            self.assertEqual(app.state_home(), shared.resolve())
+            with patch.dict(app.os.environ, {'MUST_VM_HOME': str(legacy)}):
+                self.assertEqual(app.state_home(), legacy.resolve())
+
+    def test_helper_inherits_selected_state(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, 'STATE', Path(tmp)), \
+             patch.object(app, 'protect_state'), patch.object(app.subprocess, 'Popen') as spawn:
+            app.start_helper('run', 'test.log')
+            self.assertEqual(spawn.call_args.kwargs['env']['MUST_VM_HOME'], tmp)
+
+    def test_missing_config_reports_actual_file(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, 'STATE', Path(tmp)):
+            with self.assertRaises(FileNotFoundError) as error:
+                app.terminal(SimpleNamespace(probe=None))
+            self.assertEqual(Path(error.exception.filename), Path(tmp) / 'config.json')
+
     def test_browser_blocks_external_application_launch(self):
         args=app.browser_args('browser',1088,'https://vpn.must.edu.mo/','fixture-key')
         self.assertIn('--disable-external-intent-requests',args)

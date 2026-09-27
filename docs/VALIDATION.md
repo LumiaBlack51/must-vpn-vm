@@ -67,6 +67,26 @@ Windows 初版 MSI 约 291 MiB（带 QEMU 和基础镜像），Linux 包约 15 M
   `ip -4 route get 10.100.16.13` 指向 utun7。
   用户下一次亲自双击桌面图标的结果仍需确认。
 
+## 0.2.5 根因与桌面实测（2026-09-28）
+
+- 0.2.4 用户再次双击仍报配置不存在，未发布 Release。直接读取配置确认是
+  FileNotFoundError，而非权限不足。
+- 通过 Explorer 的桌面 Shell 自动化复现：普通桌面进程看不到旧默认目录。
+  开发进程的 `realpath` 则解析到
+  `%LOCALAPPDATA%\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\MUST-VPN-VM`。
+  根因是 Windows 对打包应用子进程的 AppData 重定向，之前从开发进程启动的测试
+  没有覆盖这个差异。
+- Windows 新默认位置改为 `%USERPROFILE%\.must-vpn-vm`。没有新目录时保留对可访问
+  旧目录的兼容；显式 MUST_VM_HOME 优先。桌面脚本不再覆盖程序选出的路径，所有
+  子进程继承选定的实际状态路径。配置读取错误保留实际文件名。
+- 本机虚拟机和独立浏览器停止后，完整复制旧状态到新目录；磁盘、seed、配置及
+  密钥 SHA-256 一致。新目录 ACL 仅当前账户/SYSTEM，原始目录作为备份保留。
+- 通过 Explorer 桌面 Shell 打开原快捷方式，确认 cmd 的父进程是 Explorer；
+  启动器、VM 和交互 SSH 子进程建立，校内地址 `10.100.16.13` 走 utun7。
+  用户随后明确确认新窗口已正常进入终端。
+- 12 项 Python 测试通过，覆盖新旧目录选择、显式覆盖、子进程状态路径继承及
+  配置缺失的实际错误。Linux 0.2.5 DEB 在 Ubuntu 构建成功。
+
 ## 尚未完成的验收
 
 - 真实断网后 fail-closed（仅做了无效网卡拒绝测试，未为测试断开宿主 WLAN）。

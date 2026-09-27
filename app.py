@@ -34,8 +34,25 @@ logging.getLogger('paramiko.transport').setLevel(logging.CRITICAL)
 
 ROOT = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 RESOURCES = Path(getattr(sys, '_MEIPASS', ROOT))
-STATE = Path(os.environ.get('MUST_VM_HOME', str(Path(os.environ.get('LOCALAPPDATA', Path.home() / '.local/share')) / 'MUST-VPN-VM')))
 PINNED_DEB = '298c0bcf6aa923d53337f525affdbc99d61d07bb4119ee10a39eb697eefe32d5'
+
+
+def state_home():
+    explicit = os.environ.get('MUST_VM_HOME')
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    if sys.platform == 'win32':
+        # AppData can be redirected for children of packaged desktop apps.
+        # A profile-root directory is shared with ordinary Explorer launches.
+        shared = Path.home() / '.must-vpn-vm'
+        legacy = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local')) / 'MUST-VPN-VM'
+        if not shared.exists() and legacy.exists():
+            return legacy.resolve()
+        return shared.resolve()
+    return (Path.home() / '.local/share/MUST-VPN-VM').resolve()
+
+
+STATE = state_home()
 
 
 def digest(path):
@@ -371,6 +388,7 @@ def start_helper(command, log_name):
     protect_state()
     with open(STATE / log_name, 'ab') as log:
         return subprocess.Popen(self_command(command), stdout=log, stderr=log,
+            env={**os.environ, 'MUST_VM_HOME': str(STATE)},
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
 
 
@@ -419,8 +437,9 @@ def pinned_guest_ssh():
 
 
 def terminal(args):
-    if not (STATE / 'config.json').is_file():
-        raise ValueError('VM is not configured. Run must-vm adapters and must-vm configure first.')
+    print(f'VM state: "{STATE}"', flush=True)
+    # Read directly so Windows access errors retain the actual path and WinError.
+    # is_file() can hide the error and incorrectly suggest creating a new VM.
     cfg = config(); validate_adapter(cfg['interface'], cfg['source'])
     probe = args.probe or cfg.get('probe', '10.100.16.13')
     if ipaddress.ip_address(probe).version != 4: raise ValueError('VPN probe must be an IPv4 campus address.')

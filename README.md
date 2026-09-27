@@ -23,7 +23,7 @@ must-vm terminal
 其他校内网络可用 `must-vm terminal --probe 校内IPv4` 指定自己的验证目标。
 输入 `exit` 会退出终端，并正常关闭由这个入口启动的虚拟机；若虚拟机原本由 `must-vm run`
 启动，退出终端不会关闭它。直接关闭窗口可能无法执行正常关机，请优先使用 `exit`。
-桌面图标使用一个随 MSI 安装的命令脚本，并固定读取安装目录旁的默认虚拟机数据：
+桌面图标使用随 MSI 安装的命令脚本，和命令行共用程序的状态目录选择：
 启动失败时窗口会保留报错，按任意键关闭；
 正常退出时窗口会自行关闭。
 首次配置仍需要选择物理网卡并提供原始学校 DEB；此流程不在宿主执行学校客户端。
@@ -98,15 +98,23 @@ must-vm browser
 `--memory 512` 可试降内存，但不是已证明的最低值。
 首次初始化只创建系统和密钥，不安装/启动 VPN；安装器也没有启动自定义动作。
 
-状态保存在 `%LOCALAPPDATA%\MUST-VPN-VM`（Linux `~/.local/share/MUST-VPN-VM`），
+Windows 新配置保存在 `%USERPROFILE%\.must-vpn-vm`，避免打包桌面应用对子进程
+AppData 的重定向导致桌面入口看不到数据。没有新目录时，继续使用可访问的旧目录
+`%LOCALAPPDATA%\MUST-VPN-VM`；不会自动覆盖或重建旧虚拟机。
+Linux 仍使用 `~/.local/share/MUST-VPN-VM`。
+状态目录
 包括 SSH 密钥、来宾磁盘、登录 Cookie 和日志。Windows 设置仅当前账户/SYSTEM 可访问
 的 ACL；Linux 目录 0700。卸载保留数据，避免丢失登录状态。
 可以用 `MUST_VM_HOME` 指定另一独立目录。不要上传这个目录或分享已经登录的镜像。
+桌面入口也遵守此变量；程序显示实际使用的路径，并向子进程传递同一路径。
+若旧数据只在某个打包应用的私有 AppData 缓存中可见，先关闭虚拟机和独立浏览器，
+将完整状态目录复制到 `%USERPROFILE%\.must-vpn-vm`，保留原目录作为备份。
+迁移后的目录应保持仅当前账户和 SYSTEM 可访问；不要只复制 `config.json`。
 换网后在停止 VM 的前提下修改该目录 `config.json` 的 `interface` / `source`，再运行。
 
 ## Ubuntu 宿主版本
 
-目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.2.4_amd64.deb` 后：
+目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.2.5_amd64.deb` 后：
 
 ```sh
 must-vm adapters
