@@ -106,7 +106,7 @@ must-vm browser
 
 ## Ubuntu 宿主版本
 
-目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.2.1_amd64.deb` 后：
+目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.2.4_amd64.deb` 后：
 
 ```sh
 must-vm adapters

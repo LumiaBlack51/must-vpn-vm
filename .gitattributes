@@ -5,3 +5,4 @@
 guest/must-vpn text eol=lf
 *.yml text eol=lf
 *.json text eol=lf
+*.cmd text eol=crlf
