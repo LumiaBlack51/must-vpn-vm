@@ -25,6 +25,7 @@
 - 校内 SSH 目标的 `ip route get` 指向 utun7；TCP/SSH 握手、既有主机密钥验证通过。
   本地 2222 TCP 转发经已固定密钥的来宾 SSH 进入 VPN；用户确认服务器账号登录成功。
 - Windows 初版 MSI 真实安装返回 0，安装后启动器和精简 QEMU 可以运行。
+- 最终 0.1.1 MSI 管理解包返回 0；解包后的启动器（含 forward）和 QEMU 可运行。为保留用户当前 SSH 会话，尚未覆盖安装最终版。
 - Ubuntu 原生打包成功，dpkg-deb 元数据检查通过，冻结后的 Linux 启动器 `--help` 可运行。
 - 512 MiB 来宾配置完成重启和真实扫码登录；最终仍保留 768 MiB 默认配置以留出认证峰值余量。
 - QMP 预启动探测确认本机 WHPX 可初始化；`tcg,tb-size=32,thread=single` 参数可正常初始化。
