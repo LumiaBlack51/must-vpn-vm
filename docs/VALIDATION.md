@@ -8,7 +8,7 @@
 
 - 原始 DEB 移动后 SHA-256 与 runtime-lock.json 一致；只静态解包，没有在 Windows
   或 WSL 安装/启动厂商 VPN。WSL 仅用于编译 Linux 版本。
-- 6 个 Python 测试、4 个 Go 测试；GitHub Actions 的 Windows / Ubuntu 首轮测试通过。
+- 9 个 Python 测试、4 个 Go 测试；此前 GitHub Actions 的 Windows / Ubuntu 测试通过。
 - TCG 启动 Ubuntu Minimal；云初始化读取 virtio 只读 seed；固定 SSH 主机密钥认证通过。
 - 来宾 DNS 查询成功、HTTPS example.com 返回 200。
 - 宿主 curl → SOCKS5 → SSH → 来宾 → 用户态物理出口，HTTPS 返回 200。
@@ -25,7 +25,12 @@
 - 校内 SSH 目标的 `ip route get` 指向 utun7；TCP/SSH 握手、既有主机密钥验证通过。
   本地 2222 TCP 转发经已固定密钥的来宾 SSH 进入 VPN；用户确认服务器账号登录成功。
 - Windows 初版 MSI 真实安装返回 0，安装后启动器和精简 QEMU 可以运行。
-- 最终 0.1.1 MSI 管理解包返回 0；解包后的启动器（含 forward）和 QEMU 可运行。为保留用户当前 SSH 会话，尚未覆盖安装最终版。
+- 0.1.1 MSI 管理解包返回 0；解包后的启动器（含 forward）和 QEMU 可运行，随后真实升级安装成功。
+- 0.2.1 MSI 真实升级安装返回 0；桌面图标存在且指向安装版 `must-vm.exe terminal`。
+- 新终端入口实测启动虚拟机、VPN 服务和隔离浏览器。初版只检查 utun 路由时曾过早放行：
+  当时 `ip route get 10.100.16.13` 仍走 eth0。修正后等待该校内地址实际走 utun7，
+  用户完成扫码后才打开虚拟机交互式终端。终端内 `/usr/bin/ssh` 可用，校内 SSH 22 端口
+  TCP 连接成功；`exit` 后自动正常关机。
 - Ubuntu 原生打包成功，dpkg-deb 元数据检查通过，冻结后的 Linux 启动器 `--help` 可运行。
 - 512 MiB 来宾配置完成重启和真实扫码登录；最终仍保留 768 MiB 默认配置以留出认证峰值余量。
 - QMP 预启动探测确认本机 WHPX 可初始化；`tcg,tb-size=32,thread=single` 参数可正常初始化。
@@ -47,7 +52,7 @@ Windows 初版 MSI 约 291 MiB（带 QEMU 和基础镜像），Linux 包约 15 M
 ## 尚未完成的验收
 
 - 真实断网后 fail-closed（仅做了无效网卡拒绝测试，未为测试断开宿主 WLAN）。
-- 退出与重连、VPN 更新、不同 Windows 版本、Linux KVM。
+- VPN 更新、不同 Windows 版本、Linux KVM。
 - Windows ARM、受管理的浏览器策略、认证高峰内存以及纯校内网络表现。
 
 源码测试不能替代真实 VPN 验收，也不能证明任意 WFP 拦截场景可用。

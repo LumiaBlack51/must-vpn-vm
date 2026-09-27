@@ -7,6 +7,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 import platform
@@ -26,6 +27,10 @@ import pycdlib
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography import x509
+
+# Connection retries while the guest boots are expected; the raised exception is
+# enough for the caller, without a transport-thread traceback in the terminal.
+logging.getLogger('paramiko.transport').setLevel(logging.CRITICAL)
 
 ROOT = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 RESOURCES = Path(getattr(sys, '_MEIPASS', ROOT))
@@ -133,6 +138,8 @@ def configure(args):
     validate_adapter(args.interface, args.source)
     if not ipaddress.ip_address(args.dns).version == 4:
         raise ValueError('DNS must be a reachable IPv4 address on the physical network.')
+    if ipaddress.ip_address(args.probe).version != 4:
+        raise ValueError('VPN probe must be an IPv4 campus address.')
     deb = Path(args.deb).resolve()
     if digest(deb) != PINNED_DEB:
         raise ValueError('DEB SHA-256 does not match the inspected school package.')
@@ -150,7 +157,7 @@ def configure(args):
     subprocess.run([str(image_tool), 'resize', str(STATE / 'disk.qcow2'), '6G'], check=True)
     create_seed(deb, args.dns)
     save(STATE / 'config.json', dict(interface=args.interface, source=args.source, qemu=str(qemu), memory=args.memory,
-         accelerator=args.accelerator, portal='https://vpn.must.edu.mo/'))
+         accelerator=args.accelerator, portal='https://vpn.must.edu.mo/', probe=args.probe))
     print('VM prepared. No VPN installed or started. Run: must-vm run')
 
 
@@ -356,6 +363,110 @@ def tunnel(args):
             threading.Thread(target=worker, args=(client,), daemon=True).start()
 
 
+def self_command(command):
+    return [sys.executable, command] if getattr(sys, 'frozen', False) else [sys.executable, str(Path(__file__).resolve()), command]
+
+
+def start_helper(command, log_name):
+    protect_state()
+    with open(STATE / log_name, 'ab') as log:
+        return subprocess.Popen(self_command(command), stdout=log, stderr=log,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+
+
+def wait_for_guest(launcher, timeout=240):
+    deadline = time.monotonic() + timeout
+    print('正在启动隔离虚拟机并等待终端连接...', flush=True)
+    while time.monotonic() < deadline:
+        if launcher is not None and launcher.poll() is not None:
+            raise ValueError(f'VM startup failed; see {STATE / "terminal-vm.log"} and gateway.log.')
+        if (STATE / 'session.json').exists():
+            try:
+                with connect_guest(): return
+            except (OSError, ValueError, EOFError, paramiko.SSHException): pass
+        time.sleep(3)
+    raise ValueError(f'VM did not become ready within {timeout} seconds; see {STATE / "console.log"}.')
+
+
+def guest_check(command):
+    with connect_guest() as guest:
+        _, out, _ = guest.exec_command(command)
+        return out.channel.recv_exit_status() == 0
+
+
+def vpn_ready(target):
+    # A utun address alone does not prove that campus resources use the VPN.
+    # Check the route to a known campus host before opening the shell.
+    return guest_check("systemctl is-active --quiet aTrustDaemon.service must-vpn-core.service && "
+        f"ip -4 route get {target} | grep -Eq ' dev utun[0-9]+( |$)'")
+
+
+def pinned_guest_ssh():
+    ssh = shutil.which('ssh.exe' if os.name == 'nt' else 'ssh')
+    if not ssh: raise ValueError('OpenSSH client is required to open the interactive guest terminal.')
+    ports = json.loads((STATE / 'session.json').read_text())
+    host, port = ports['ssh'].split(':')
+    if host != '127.0.0.1': raise ValueError('Guest SSH forwarding must be loopback-only.')
+    kind, encoded, *_ = json.loads((STATE / 'host-key.json').read_text())['key'].split()
+    known_hosts = STATE / 'guest_known_hosts'
+    known_hosts.write_text(f'[{host}]:{port} {kind} {encoded}\n', encoding='ascii')
+    if os.name != 'nt': known_hosts.chmod(0o600)
+    null_config = 'NUL' if os.name == 'nt' else '/dev/null'
+    return [ssh, '-F', null_config, '-o', 'StrictHostKeyChecking=yes',
+        '-o', f'UserKnownHostsFile={known_hosts}', '-o', 'IdentitiesOnly=yes',
+        '-o', 'BatchMode=yes', '-i', str(STATE / 'id_ed25519'), '-p', port,
+        '-tt', 'vpn@127.0.0.1']
+
+
+def terminal(args):
+    if not (STATE / 'config.json').is_file():
+        raise ValueError('VM is not configured. Run must-vm adapters and must-vm configure first.')
+    cfg = config(); validate_adapter(cfg['interface'], cfg['source'])
+    probe = args.probe or cfg.get('probe', '10.100.16.13')
+    if ipaddress.ip_address(probe).version != 4: raise ValueError('VPN probe must be an IPv4 campus address.')
+    launcher = browser = None
+    try:
+        if not (STATE / 'session.json').exists():
+            launcher = start_helper('run', 'terminal-vm.log')
+        wait_for_guest(launcher)
+        if not guest_check('test -x /usr/share/sangfor/aTrust/resources/bin/aTrustAgent'):
+            print('首次在虚拟机内安装学校 VPN...', flush=True)
+            if exec_guest('sudo must-vpn install') != 0: raise ValueError('Guest VPN installation failed.')
+        if not guest_check('command -v ssh >/dev/null'):
+            print('正在虚拟机内安装 SSH 客户端...', flush=True)
+            if exec_guest('sudo apt-get update && sudo apt-get install -y --no-install-recommends openssh-client') != 0:
+                raise ValueError('Guest SSH client installation failed.')
+        print('正在启动学校 VPN...', flush=True)
+        if exec_guest('sudo must-vpn start') != 0: raise ValueError('Guest VPN service failed to start.')
+        if not vpn_ready(probe):
+            print('等待已保存的登录状态...', flush=True)
+            for _ in range(5):
+                time.sleep(3)
+                if vpn_ready(probe): break
+        if not vpn_ready(probe):
+            print('需要学校扫码认证；正在打开隔离登录浏览器...', flush=True)
+            browser = start_helper('browser', 'terminal-browser.log')
+        deadline = time.monotonic() + 600
+        while not vpn_ready(probe):
+            if browser is not None and browser.poll() is not None:
+                raise ValueError(f'Login browser bridge stopped; see {STATE / "terminal-browser.log"}.')
+            if launcher is not None and launcher.poll() is not None:
+                raise ValueError('VM stopped while waiting for VPN authentication.')
+            if time.monotonic() >= deadline:
+                raise ValueError('VPN was not ready after 10 minutes. Complete login in the isolated browser and retry.')
+            time.sleep(3)
+        print(f'校内地址 {probe} 已走 VPN。现在可直接运行 ssh 用户名@校内主机；输入 exit 退出终端。', flush=True)
+        return subprocess.call(pinned_guest_ssh())
+    finally:
+        if browser is not None and browser.poll() is None: browser.terminate()
+        if launcher is not None and launcher.poll() is None:
+            try:
+                exec_guest('sudo systemctl poweroff --no-block')
+                launcher.wait(timeout=45)
+            except (OSError, ValueError, EOFError, paramiko.SSHException, subprocess.TimeoutExpired):
+                print('虚拟机未确认关机；请运行 must-vm shutdown。', file=sys.stderr)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
@@ -364,6 +475,7 @@ def main():
     c.add_argument('--deb', required=True); c.add_argument('--interface', required=True); c.add_argument('--source', required=True)
     c.add_argument('--dns', default='1.1.1.1'); c.add_argument('--base'); c.add_argument('--qemu')
     c.add_argument('--memory', type=int, choices=range(384, 4097), default=768, metavar='384..4096')
+    c.add_argument('--probe', default='10.100.16.13', help='Known campus IPv4 host used to verify the VPN route')
     c.add_argument('--accelerator', choices=['auto','tcg', 'whpx'] if os.name == 'nt' else ['auto','tcg', 'kvm'], default='auto')
     sub.add_parser('run')
     for name in ['status', 'install-vpn', 'start-vpn', 'stop-vpn', 'shutdown']: sub.add_parser(name)
@@ -371,12 +483,14 @@ def main():
     for name in ['browser', 'proxy']:
         c = sub.add_parser(name); c.add_argument('--port', type=int, default=1088)
     c=sub.add_parser('forward');c.add_argument('target');c.add_argument('--port',type=int,default=2222)
+    c=sub.add_parser('terminal');c.add_argument('--probe', help='Override the campus IPv4 route probe')
     args = p.parse_args()
     if args.command == 'adapters': print(json.dumps(adapters(), indent=2, ensure_ascii=False))
     elif args.command == 'configure': configure(args)
     elif args.command == 'run': run_vm(args)
     elif args.command in ['browser', 'proxy']: tunnel(args)
     elif args.command == 'forward': forward(args)
+    elif args.command == 'terminal': return terminal(args)
     else:
         commands = {'status': 'sudo must-vpn status', 'install-vpn': 'sudo must-vpn install',
                     'start-vpn': 'sudo must-vpn start', 'stop-vpn': 'sudo must-vpn stop', 'shutdown': 'sudo systemctl poweroff --no-block'}

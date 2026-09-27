@@ -1,6 +1,7 @@
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import socket
 import tempfile
 import threading
@@ -62,6 +63,41 @@ class AppTests(unittest.TestCase):
     def test_no_auth_method_is_rejected(self):
         a,b = socket.socketpair(); t=threading.Thread(target=app.socks_client,args=(a,None));t.start()
         b.sendall(b'\x05\x01\x02'); self.assertEqual(app.exact(b,2),b'\x05\xff'); b.close(); t.join(2)
+
+    def test_interactive_guest_ssh_uses_pinned_key(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, 'STATE', Path(tmp)), patch.object(app.shutil, 'which', return_value='ssh'):
+            state = Path(tmp)
+            (state / 'session.json').write_text(json.dumps({'ssh': '127.0.0.1:22345'}))
+            (state / 'host-key.json').write_text(json.dumps({'key': 'ssh-ed25519 Zml4dHVyZQ=='}))
+            command = app.pinned_guest_ssh()
+            self.assertIn('StrictHostKeyChecking=yes', command)
+            self.assertIn('BatchMode=yes', command)
+            self.assertIn('vpn@127.0.0.1', command)
+            self.assertIn('-tt', command)
+            self.assertEqual((state / 'guest_known_hosts').read_text(), '[127.0.0.1]:22345 ssh-ed25519 Zml4dHVyZQ==\n')
+
+    def test_terminal_opens_shell_only_after_tunnel_route(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, 'STATE', Path(tmp)):
+            state = Path(tmp)
+            (state / 'config.json').write_text('{}')
+            (state / 'session.json').write_text('{}')
+            with patch.object(app, 'config', return_value={'interface':'WLAN','source':'192.0.2.1'}), \
+                 patch.object(app, 'validate_adapter'), patch.object(app, 'wait_for_guest'), \
+                 patch.object(app, 'guest_check', return_value=True), \
+                 patch.object(app, 'exec_guest', return_value=0), \
+                 patch.object(app, 'vpn_ready', side_effect=[False,True,True,True]), \
+                 patch.object(app.time, 'sleep'), patch.object(app, 'start_helper') as helper, \
+                 patch.object(app, 'pinned_guest_ssh', return_value=['ssh','guest']), \
+                 patch.object(app.subprocess, 'call', return_value=0) as shell:
+                self.assertEqual(app.terminal(SimpleNamespace(probe=None)), 0)
+                helper.assert_not_called()
+                shell.assert_called_once_with(['ssh','guest'])
+
+    def test_vpn_ready_requires_campus_route_on_tunnel(self):
+        with patch.object(app, 'guest_check', return_value=False) as check:
+            self.assertFalse(app.vpn_ready('10.100.16.13'))
+            self.assertIn('ip -4 route get 10.100.16.13', check.call_args.args[0])
+            self.assertIn(' dev utun', check.call_args.args[0])
 
 
 if __name__ == '__main__': unittest.main()

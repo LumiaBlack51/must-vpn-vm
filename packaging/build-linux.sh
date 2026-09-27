@@ -26,15 +26,15 @@ chmod -R u=rwX,go=rX "$stage"
 chmod 755 "$stage" "$stage/DEBIAN" "$stage/usr/bin/must-vm" "$stage/opt/must-vm/must-vm" "$stage/opt/must-vm/must-gateway"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: must-vpn-vm
-Version: 0.1.1
+Version: 0.2.1
 Section: net
 Priority: optional
 Architecture: amd64
 Maintainer: MUST VM Project
-Depends: qemu-system-x86, qemu-utils, iproute2
+Depends: qemu-system-x86, qemu-utils, iproute2, openssh-client
 Description: Isolated command-line Ubuntu VM for MUST VPN (preview)
  Does not install or execute the vendor VPN on the host.
 EOF
 chmod 644 "$stage/DEBIAN/control"
-dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-vm_0.1.1_amd64.deb
+dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-vm_0.2.1_amd64.deb
 echo "Build staging retained at $stage"

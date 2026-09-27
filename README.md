@@ -7,6 +7,24 @@
 **状态：用户已完成真实扫码登录，并经虚拟机 VPN 成功登录校内 SSH 服务器。不能承诺所有
 Windows 电脑、Clash/WFP 驱动和学校认证策略都兼容。** 详见 [验证记录](docs/VALIDATION.md)。
 
+## 一键进入校内终端
+
+完成一次性 `configure` 后，双击 Windows 桌面的 **MUST VPN Terminal** 图标，或在新终端运行：
+
+```powershell
+must-vm terminal
+```
+
+这个入口自动启动虚拟机、按需在**虚拟机内**安装和启动学校 VPN，确认已知校内地址
+`10.100.16.13` 经虚拟机隧道路由后，
+随后在同一个窗口打开虚拟机的交互式终端。已有登录有效时无需扫码；登录过期时会打开
+独立浏览器，请按学校流程扫码。出现 `vpn@must-vpn` 提示符后，直接输入
+`ssh 用户名@校内主机`，SSH 的用户名、密码和主机密钥交互都由虚拟机处理。
+其他校内网络可用 `must-vm terminal --probe 校内IPv4` 指定自己的验证目标。
+输入 `exit` 会退出终端，并正常关闭由这个入口启动的虚拟机；若虚拟机原本由 `must-vm run`
+启动，退出终端不会关闭它。直接关闭窗口可能无法执行正常关机，请优先使用 `exit`。
+首次配置仍需要选择物理网卡并提供原始学校 DEB；此流程不在宿主执行学校客户端。
+
 ## 网络结构
 
 ```text
@@ -34,15 +52,17 @@ QEMU 没有默认 NAT、TAP、宿主共享目录或默认网卡。网关不使�
 持续抬高宿主内存。可以明确选择 `--accelerator tcg` / `whpx`；
 程序不会替你启用系统功能或重启。ARM Windows 尚未验证。
 
-安装 MSI 后重新打开终端（或进入 `%LOCALAPPDATA%\MUST VPN VM App`）：
+安装 MSI 后会创建桌面图标。首次使用时重新打开终端（或进入 `%LOCALAPPDATA%\MUST VPN VM App`），
+完成一次性配置：
 
 ```powershell
 must-vm adapters
 must-vm configure --deb 'E:\software\songfor\MUSTVPN_amd64[https@vpn.must.edu.mo@443].deb' --interface WLAN --source <上一步物理IPv4> --dns <可直连的DNS-IPv4>
-must-vm run
+must-vm terminal
 ```
 
-`run` 持续前台运行。另开终端，等待第一次初始化完成：
+`terminal` 会引导后续安装、登录和终端使用。也可以用原来的手动分步流程：`run` 持续前台运行，
+另开终端，等待第一次初始化完成：
 
 ```powershell
 must-vm status
@@ -83,13 +103,13 @@ must-vm browser
 
 ## Ubuntu 宿主版本
 
-目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.1.1_amd64.deb` 后：
+目标 Ubuntu 24.04 x64。安装构建出的 `must-vpn-vm_0.2.1_amd64.deb` 后：
 
 ```sh
 must-vm adapters
 must-vm configure --base /path/to/base.qcow2 --deb /path/to/MUSTVPN.deb \
   --interface enp3s0 --source 192.168.1.123 --dns 192.168.1.1 --accelerator kvm
-must-vm run
+must-vm terminal
 ```
 
 Linux 包通过依赖安装 QEMU；基础镜像按 runtime-lock.json 下载并验证 SHA-256。
