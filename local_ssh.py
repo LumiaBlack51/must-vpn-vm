@@ -4,9 +4,29 @@ import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import uuid
 
 import routing
+
+
+def protect_ssh(folder):
+    if os.name == 'nt':
+        sid = json.loads(subprocess.check_output(['powershell.exe', '-NoProfile', '-Command',
+            '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value | ConvertTo-Json'], text=True))
+        # Python's Windows temporary-directory ACLs can propagate OWNER RIGHTS.
+        # Win32 OpenSSH rejects that SID even when it only represents the owner.
+        for path in [folder, *(p for p in folder.iterdir() if p.is_file())]:
+            rights = '(OI)(CI)F' if path.is_dir() else 'F'
+            subprocess.run(['icacls.exe', str(path), '/inheritance:r', '/grant:r',
+                f'*{sid}:{rights}', f'*S-1-5-18:{rights}'],
+                check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(['icacls.exe', str(folder), '/remove:g', '*S-1-3-4', '/T'],
+            check=True, stdout=subprocess.DEVNULL)
+    else:
+        folder.chmod(0o700)
+        for file in folder.iterdir():
+            if file.is_file(): file.chmod(0o600)
 
 
 def safe_alias(alias):
@@ -94,7 +114,7 @@ def write_config(state, command):
     lines += ['Host *', '']
     destination = folder / 'config'
     destination.write_text('\n'.join(lines), encoding='utf-8')
-    if os.name != 'nt': destination.chmod(0o600)
+    protect_ssh(folder)
     return destination
 
 

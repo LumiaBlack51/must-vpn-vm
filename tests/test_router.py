@@ -135,6 +135,10 @@ class NativeSshTests(unittest.TestCase):
             state = Path(tmp) / 'private'
             with patch.object(app, 'STATE', state): app.protect_state()
             (state / 'ssh').mkdir()
+            if os.name == 'nt':
+                # Reproduce the ACL inherited from Python's Windows temp dirs.
+                subprocess.run(['icacls.exe', str(state / 'ssh'), '/grant', '*S-1-3-4:(OI)(CI)F'],
+                               check=True, stdout=subprocess.DEVNULL)
             (state / 'ssh/targets.json').write_text('[]')
             config = local_ssh.write_config(state, 'must-router ssh-connect')
             user = state / 'user-config'
