@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import select
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -23,6 +24,9 @@ DEFAULTS = {
     'fallback': True,
     'direct_timeout': 4,
     'vpn_timeout': 10,
+    'traffic_mode': 'all',
+    'proxy_domains': [],
+    'ssh_ports': [22],
 }
 HEARTBEAT_TTL = 12
 
@@ -42,7 +46,7 @@ def hostname(value):
 class Policy:
     def __init__(self, data=None):
         self.data = {**DEFAULTS, **(data or {})}
-        for key in ('aisc_hosts', 'school_hosts'):
+        for key in ('aisc_hosts', 'school_hosts', 'proxy_domains'):
             if not isinstance(self.data[key], list): raise ValueError(f'{key} must be a list')
             self.data[key] = [hostname(h) for h in self.data[key]]
         self.networks = {}
@@ -52,6 +56,11 @@ class Policy:
                 raise ValueError('Guest VPN networks must be IPv4.')
             self.data[key] = [str(n) for n in self.networks[key]]
         if not isinstance(self.data['fallback'], bool): raise ValueError('fallback must be true or false')
+        if self.data['traffic_mode'] not in ('ssh', 'all', 'domains'):
+            raise ValueError('traffic_mode must be ssh, all, or domains.')
+        if not isinstance(self.data['ssh_ports'], list) or not all(
+                isinstance(p, int) and 1 <= p <= 65535 for p in self.data['ssh_ports']):
+            raise ValueError('ssh_ports must be a list of TCP port numbers.')
         for key in ('direct_timeout', 'vpn_timeout'):
             if not 0.1 <= float(self.data[key]) <= 60: raise ValueError(f'{key} must be between 0.1 and 60')
             self.data[key] = float(self.data[key])
@@ -68,14 +77,17 @@ class Policy:
             return host in self.data[group + '_hosts'] or any(ip in n for n in self.networks[group + '_networks'])
         return any(host == h or host.endswith('.' + h) for h in self.data[group + '_hosts'])
 
-    def mode(self, host):
+    def mode(self, host, port=22):
         host = hostname(host)
+        if self.data['traffic_mode'] == 'ssh' and port not in self.data['ssh_ports']: return 'direct'
+        if self.data['traffic_mode'] == 'domains':
+            return 'vpn' if any(host == h or host.endswith('.' + h) for h in self.data['proxy_domains']) else 'direct'
         if self.matches(host, 'aisc'): return 'vpn'
         if self.matches(host, 'school') and self.data['fallback']: return 'fallback'
         return 'direct'
 
-    def vpn_allowed(self, host):
-        return self.mode(host) in ('vpn', 'fallback')
+    def vpn_allowed(self, host, port=22):
+        return self.mode(host, port) in ('vpn', 'fallback')
 
 
 def _lock(file, acquire):
@@ -164,7 +176,7 @@ class Router:
         with self._lock:
             if time.monotonic() < self._retry_after: raise OSError('VPN server temporarily unavailable; retry later.')
         endpoint = server_endpoint(self.state)
-        if endpoint is None: raise OSError('VPN server is off or VPN is not ready. Run must-vm serve when needed.')
+        if endpoint is None: raise OSError('VPN server is off or VPN is not ready. Start the VPN server when needed.')
         try: return socks_dial(endpoint, host, port, self.policy.data['vpn_timeout'])
         except OSError:
             # Brief circuit breaker for a server crash between heartbeat and connect.
@@ -174,15 +186,51 @@ class Router:
     def connect(self, host, port):
         host = hostname(host)
         if not 1 <= port <= 65535: raise ValueError('Port must be between 1 and 65535.')
-        mode = self.policy.mode(host)
+        mode = self.policy.mode(host, port)
         if mode == 'vpn': return self.vpn(host, port)
         try:
+            if mode == 'fallback' and port in self.policy.data['ssh_ports']:
+                check_ssh_direct(host, port, self.policy.data['direct_timeout'])
+            elif mode == 'fallback' and port in (80, 443):
+                check_web_direct(host, port, self.policy.data['direct_timeout'])
             sock = socket.create_connection((host, port), timeout=self.policy.data['direct_timeout'])
             sock.settimeout(None)
             return sock
         except OSError:
             if mode != 'fallback' or server_endpoint(self.state) is None: raise
             return self.vpn(host, port)
+
+
+def check_web_direct(host, port, timeout):
+    """Check reachability without replaying the user's HTTP request or credentials."""
+    with socket.create_connection((host, port), timeout=timeout) as probe:
+        if port == 443:
+            with ssl.create_default_context().wrap_socket(probe, server_hostname=host): return
+        probe.sendall(f'HEAD / HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n'.encode('ascii'))
+        if not exact(probe, 5).startswith(b'HTTP/'):
+            raise OSError('Direct endpoint did not identify as HTTP.')
+
+
+def check_ssh_direct(host, port, timeout):
+    """Some TUN proxies acknowledge TCP before they can reach the SSH server.
+
+    Probe identification on a separate connection. Never inject this probe's
+    client version into the real SSH exchange (it is covered by the session hash).
+    """
+    with socket.create_connection((host, port), timeout=timeout) as probe:
+        deadline = time.monotonic() + timeout
+        probe.sendall(b'SSH-2.0-MUSTVPN_RouteProbe\r\n')
+        buffer = bytearray()
+        while len(buffer) < 8192:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0: raise TimeoutError('Direct SSH identification timed out.')
+            probe.settimeout(remaining)
+            data = probe.recv(1024)
+            if not data: raise OSError('Direct SSH closed before identification.')
+            buffer.extend(data)
+            for line in buffer.split(b'\n')[:-1]:
+                if line.startswith((b'SSH-2.0-', b'SSH-1.99-')): return
+        raise OSError('Direct endpoint did not identify as SSH.')
 
 
 def shutdown_write(stream):
@@ -273,6 +321,11 @@ def socks_listener(port, connect):
 
 def pac_script(policy, port):
     # Only campus/AISC requests visit the dispatcher. No host DNS lookup in PAC.
+    if policy.data['traffic_mode'] == 'ssh':
+        return 'function FindProxyForURL(url, host) { return "DIRECT"; }\n'
+    domains_only = policy.data['traffic_mode'] == 'domains'
+    hosts = policy.data['proxy_domains'] if domains_only else policy.data['aisc_hosts'] + policy.data['school_hosts']
+    networks = [] if domains_only else [n for group in policy.networks.values() for n in group]
     return '''function FindProxyForURL(url, host) {
   host = host.toLowerCase().replace(/\\.$/, "");
   var groups = %s;
@@ -288,8 +341,8 @@ def pac_script(policy, port):
   }
   return "DIRECT";
 }
-''' % (json.dumps(policy.data['aisc_hosts'] + policy.data['school_hosts']), port,
-       json.dumps([[str(n.network_address), str(n.netmask)] for group in policy.networks.values() for n in group]), port)
+''' % (json.dumps(hosts), port,
+       json.dumps([[str(n.network_address), str(n.netmask)] for n in networks]), port)
 
 
 @contextmanager

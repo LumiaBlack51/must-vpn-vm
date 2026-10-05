@@ -565,7 +565,7 @@ def guest_route_ready(guest, probe):
 
 
 def guest_vpn_connect(guest, policy, host, port):
-    if not policy.vpn_allowed(host): raise OSError('Target is outside the configured school/AISC scope.')
+    if not policy.vpn_allowed(host, port): raise OSError('Target is outside the configured school/AISC scope.')
     if ':' in host:
         raise OSError('Guest VPN supports IPv4 only.')
     # Existing VMs need no seed/image migration: send the helper over pinned SSH.
@@ -623,6 +623,9 @@ def routing_config(args):
         if value is not None: data[key] = value
     if args.fallback is not None: data['fallback'] = args.fallback == 'on'
     if args.direct_timeout is not None: data['direct_timeout'] = args.direct_timeout
+    if getattr(args, 'mode', None) is not None: data['traffic_mode'] = args.mode
+    if getattr(args, 'domain', None) is not None: data['proxy_domains'] = args.domain
+    if getattr(args, 'ssh_port', None) is not None: data['ssh_ports'] = args.ssh_port
     policy = routing.Policy(data)
     protect_state(); save(STATE / 'routing.json', policy.data)
     print(json.dumps(policy.data, indent=2, ensure_ascii=False))
@@ -701,6 +704,8 @@ def main():
                        ('school-host','school_hosts'), ('school-network','school_networks')]:
         c.add_argument('--' + flag, dest=dest, action='append')
     c.add_argument('--fallback', choices=['on','off']); c.add_argument('--direct-timeout', type=float)
+    c.add_argument('--mode', choices=['ssh','all','domains']); c.add_argument('--domain', action='append')
+    c.add_argument('--ssh-port', type=int, action='append')
     c=sub.add_parser('smart-proxy', help='Local selective proxy; never starts the VM')
     c.add_argument('--port', type=int, default=1088); c.add_argument('--pac-port', type=int, default=8765)
     c.add_argument('--browser', action='store_true'); c.add_argument('--url', default='https://www.must.edu.mo/')

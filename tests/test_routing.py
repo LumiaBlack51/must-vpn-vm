@@ -77,9 +77,11 @@ class RoutingTests(unittest.TestCase):
     def test_school_success_never_checks_or_uses_vpn(self):
         sock = Mock()
         with patch.object(routing.socket, 'create_connection', return_value=sock) as direct, \
+             patch.object(routing, 'check_web_direct') as probe, \
              patch.object(routing, 'server_endpoint') as status, patch.object(routing, 'socks_dial') as vpn:
             self.assertIs(self.router.connect('www.must.edu.mo', 443), sock)
         direct.assert_called_once_with(('www.must.edu.mo', 443), timeout=4)
+        probe.assert_called_once_with('www.must.edu.mo', 443, 4)
         status.assert_not_called(); vpn.assert_not_called()
 
     def test_school_failure_server_off_performs_no_proxy_dial(self):
