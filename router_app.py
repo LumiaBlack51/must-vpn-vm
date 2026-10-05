@@ -12,7 +12,7 @@ import app
 import local_ssh
 import routing
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 DEFAULT_PORT = 1189
 PROXY_PORT = 1188
 PAC_PORT = 18765
@@ -66,13 +66,15 @@ def clone_state(source, qemu=None):
 def settings(arguments):
     if not arguments or arguments in (['--gui'], ['--no-browser']):
         import router_settings
+        from router_control import Controller
         app.protect_state()
         def save_policy(policy):
             app.save(app.STATE / 'routing.json', policy.data)
             if (app.STATE / 'ssh/targets.json').exists():
                 local_ssh.write_config(app.STATE, proxy_command())
         return router_settings.run(app.STATE, app.RESOURCES / 'router_settings.html', save_policy,
-                                   open_browser=arguments != ['--no-browser'])
+                                   open_browser=arguments != ['--no-browser'],
+                                   controller=Controller(app.STATE, lambda event: serve([], event)))
     if arguments == ['--show']:
         print(json.dumps(routing.Policy.load(app.STATE).data, indent=2, ensure_ascii=False))
         return 0
@@ -90,6 +92,22 @@ def proxy_command():
     return text.replace('%', '%%')
 
 
+def serve(arguments, stop_event=None):
+    parser = argparse.ArgumentParser(prog='must-router serve')
+    parser.add_argument('--port', type=int, default=DEFAULT_PORT)
+    parser.add_argument('--probe')
+    options = parser.parse_args(arguments)
+    options.stop_event = stop_event
+    app.protect_state()
+    policy = routing.Policy.load(app.STATE)
+    router = routing.Router(app.STATE, policy)
+    with routing.socks_listener(PROXY_PORT, router.connect), \
+         routing.pac_server(PAC_PORT, policy, PROXY_PORT, app.STATE):
+        print(f'本地分流 SOCKS5：127.0.0.1:{PROXY_PORT}；PAC：http://127.0.0.1:{PAC_PORT}/proxy.pac', flush=True)
+        app.serve(options)
+    return 0
+
+
 def main():
     global_parser = argparse.ArgumentParser(add_help=False)
     global_parser.add_argument('--home', type=Path)
@@ -103,7 +121,7 @@ def main():
         print('MUST VPN Router ' + VERSION)
         print('init --from-state PATH    关闭原虚拟机后创建独立副本')
         print('serve                    启动独立虚拟机、VPN 及本地分流入口')
-        print('settings                 打开图形设置页面（无需启动虚拟机）')
+        print('ui / settings            打开主界面：VPN 启停、状态和连接设置')
         print('settings --show          在终端查看设置；也支持 --mode / --domain / --fallback')
         print('import-ssh [AISC AISC-CPU] 导入来宾的指定 SSH 配置及密钥到私有目录')
         print('ssh-setup [--install]     生成 SSH 配置；--install 添加独立 Include')
@@ -117,7 +135,7 @@ def main():
         parser.add_argument('--from-state', required=True, type=Path); parser.add_argument('--qemu', type=Path)
         options = parser.parse_args(arguments); clone_state(options.from_state, options.qemu)
         return 0
-    if command == 'settings': return settings(arguments)
+    if command in ('ui', 'settings'): return settings(arguments)
     if command == 'import-ssh':
         aliases = arguments or ['AISC', 'AISC-CPU']
         app.protect_state()
@@ -152,17 +170,7 @@ def main():
             '--disable-external-intent-requests', '--no-first-run', WEB_URL])
         return 0
     if command == 'serve':
-        if '--port' not in arguments: arguments += ['--port', str(DEFAULT_PORT)]
-        app.protect_state()
-        policy = routing.Policy.load(app.STATE)
-        router = routing.Router(app.STATE, policy)
-        # Own both listeners in this process: bind errors fail startup, and a
-        # process crash cannot leave a detached proxy holding the fixed ports.
-        with routing.socks_listener(PROXY_PORT, router.connect), \
-             routing.pac_server(PAC_PORT, policy, PROXY_PORT, app.STATE):
-            sys.argv = [sys.argv[0], command, *arguments]
-            print(f'本地分流 SOCKS5：127.0.0.1:{PROXY_PORT}；PAC：http://127.0.0.1:{PAC_PORT}/proxy.pac', flush=True)
-            return app.main()
+        return serve(arguments)
     if command in ('browser', 'proxy', 'smart-proxy') and '--port' not in arguments:
         arguments += ['--port', str(PROXY_PORT if command == 'smart-proxy' else 0)]
     if command == 'smart-proxy' and '--pac-port' not in arguments: arguments += ['--pac-port', str(PAC_PORT)]

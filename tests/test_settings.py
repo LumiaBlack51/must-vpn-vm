@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock
 
 import app
 import router_settings
@@ -16,8 +17,13 @@ class SettingsTests(unittest.TestCase):
         self.state = Path(self.temp.name)
         self.initial = routing.Policy({'aisc_hosts':['aisc.must.edu.mo'], 'school_networks':['10.20.0.0/16']})
         app.save(self.state/'routing.json', self.initial.data)
+        self.controller = Mock()
+        self.controller.active.return_value = False
+        self.controller.status.return_value = {'phase':'stopped','managed':False,'ready':False}
+        self.controller.start.return_value = {'phase':'starting','managed':True,'ready':False}
+        self.controller.stop.return_value = {'phase':'stopping','managed':True,'ready':False}
         self.server = router_settings.make_server(self.state, app.ROOT/'router_settings.html',
-            lambda policy: app.save(self.state/'routing.json',policy.data))
+            lambda policy: app.save(self.state/'routing.json',policy.data), self.controller)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
         self.addCleanup(self.close)
         self.prefix = self.server.url[len(self.server.origin):]
@@ -76,6 +82,30 @@ class SettingsTests(unittest.TestCase):
         status, _, _ = self.request('api/close','POST',{},self.write_headers())
         self.assertEqual(status,200); self.assertTrue(self.server.stopping.is_set())
         self.assertFalse((self.state/'session.json').exists())
+
+    def test_control_actions_require_same_origin_and_status_never_starts_vm(self):
+        self.assertEqual(json.loads(self.request('api/status')[2])['phase'],'stopped')
+        self.controller.start.assert_not_called()
+        for action in ['start','stop','restart']:
+            self.assertEqual(self.request('api/'+action,'POST',{},headers={})[0],403)
+        self.controller.start.assert_not_called(); self.controller.stop.assert_not_called()
+        for action in ['start','stop','restart']:
+            self.assertEqual(self.request('api/'+action,'POST',{},self.write_headers())[0],200)
+        self.controller.start.assert_called_once()
+        self.assertEqual([call.args for call in self.controller.stop.call_args_list],[(False,),(True,)])
+
+    def test_cannot_close_control_server_while_vpn_is_owned(self):
+        self.controller.active.return_value = True
+        self.assertEqual(self.request('api/close','POST',{},self.write_headers())[0],409)
+        self.assertFalse(self.server.stopping.is_set())
+
+    def test_save_only_prompts_restart_when_running_policy_changed(self):
+        self.controller.active.return_value = True
+        for changed in [False, True]:
+            self.controller.status.return_value = {'restart_required':changed}
+            code, _, body = self.request(method='POST', fields={'traffic_mode':'ssh'}, headers=self.write_headers())
+            self.assertEqual(code,200)
+            self.assertEqual('重启并应用' in json.loads(body)['message'],changed)
 
 
 if __name__=='__main__': unittest.main()

@@ -47,7 +47,7 @@ class RouterSettingsTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows GUI entry point')
     def test_gui_generated_ssh_uses_main_executable(self):
         with patch.object(router_app.sys, 'frozen', True, create=True), \
-             patch.object(router_app.sys, 'executable', r'C:\Router\must-router-settings.exe'):
+             patch.object(router_app.sys, 'executable', r'C:\Router\must-router-ui.exe'):
             self.assertEqual(router_app.self_command('ssh-connect')[0], r'C:\Router\must-router.exe')
 
     def test_import_refuses_running_source_before_copy(self):

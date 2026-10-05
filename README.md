@@ -1,9 +1,10 @@
 # MUST VPN VM — 开发预览版
 
-**新增独立产品 [MUST VPN Router 0.3.1](ROUTER.md)**：支持普通宿主终端 `ssh AISC`、
+**新增独立产品 [MUST VPN Router 0.3.2](ROUTER.md)**：支持普通宿主终端 `ssh AISC`、
 AISC Web 分流、仅 SSH / AISC SSH 和 Web / 指定域名三种设置。新 MSI/DEB 与原版并存，
 安装和虚拟机数据独立。下文仍是原版 `must-vm` 的使用说明。
-桌面 **MUST VPN Router 设置** 可打开可视化设置页面，无需启动虚拟机。
+桌面只保留 **MUST VPN Router** 一个入口，VPN 启停、实时状态与代理设置位于同一主界面。
+打开窗口不会自动启动虚拟机，关闭窗口后已启动的 VPN 继续在后台运行。
 
 把学校 aTrust 放进独立 QEMU 虚拟机，保留 Windows / Ubuntu 宿主机的 Clash。
 当前实现为命令行软件，来宾系统为 Ubuntu Minimal 24.04 amd64，无桌面、无浏览器。

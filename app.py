@@ -487,14 +487,31 @@ def pinned_guest_ssh():
         '-tt', 'vpn@127.0.0.1']
 
 
+class ServiceStopped(Exception):
+    """A local control window requested an orderly service shutdown."""
+
+
+def check_stop(event):
+    if event is not None and event.is_set(): raise ServiceStopped()
+
+
+def service_wait(seconds, event):
+    if event is None: time.sleep(seconds)
+    elif event.wait(seconds): raise ServiceStopped()
+
+
 @contextmanager
-def ready_vm(probe, need_ssh=False):
+def ready_vm(probe, need_ssh=False, stop_event=None):
     """Keep an explicitly requested VM alive, and close only one we started."""
     launcher = browser = None
     try:
+        check_stop(stop_event)
         if not vm_running():
             launcher = start_helper('run', 'terminal-vm.log')
+        # An owned VM must finish booting before cancellation can power it off
+        # cleanly. Never terminate its launcher and leave QEMU orphaned.
         wait_for_guest(launcher)
+        check_stop(stop_event)
         if not guest_check('test -x /usr/share/sangfor/aTrust/resources/bin/aTrustAgent'):
             print('首次在虚拟机内安装学校 VPN...', flush=True)
             if exec_guest('sudo must-vpn install') != 0: raise ValueError('Guest VPN installation failed.')
@@ -503,11 +520,12 @@ def ready_vm(probe, need_ssh=False):
             if exec_guest('sudo apt-get update && sudo apt-get install -y --no-install-recommends openssh-client') != 0:
                 raise ValueError('Guest SSH client installation failed.')
         print('正在启动学校 VPN...', flush=True)
+        check_stop(stop_event)
         if exec_guest('sudo must-vpn start') != 0: raise ValueError('Guest VPN service failed to start.')
         if not vpn_ready(probe):
             print('等待已保存的登录状态...', flush=True)
             for _ in range(5):
-                time.sleep(3)
+                service_wait(3, stop_event)
                 if vpn_ready(probe): break
         if not vpn_ready(probe):
             print('需要学校扫码认证；正在打开隔离登录浏览器...', flush=True)
@@ -516,13 +534,15 @@ def ready_vm(probe, need_ssh=False):
             browser = start_helper('browser', 'terminal-browser.log', '--port', '0')
         deadline = time.monotonic() + 600
         while not vpn_ready(probe):
+            check_stop(stop_event)
             if browser is not None and browser.poll() is not None:
                 raise ValueError(f'Login browser bridge stopped; see {STATE / "terminal-browser.log"}.')
             if launcher is not None and launcher.poll() is not None:
                 raise ValueError('VM stopped while waiting for VPN authentication.')
             if time.monotonic() >= deadline:
                 raise ValueError('VPN was not ready after 10 minutes. Complete login in the isolated browser and retry.')
-            time.sleep(3)
+            service_wait(3, stop_event)
+        check_stop(stop_event)
         stop_helper(browser)
         if browser is not None: close_isolated_browser()
         browser = None
@@ -588,10 +608,12 @@ def serve(args):
     policy = routing.Policy.load(STATE)
     probe = vm_probe(args)
     protect_state()
+    stop_event = getattr(args, 'stop_event', None)
     with routing.server_lease(STATE):
         (STATE / 'server.json').unlink(missing_ok=True)
         try:
-            with ready_vm(probe), connect_guest() as guest:
+            vm = ready_vm(probe) if stop_event is None else ready_vm(probe, stop_event=stop_event)
+            with vm, connect_guest() as guest:
                 ready = threading.Event()
                 def connect(host, port):
                     if not ready.is_set(): raise OSError('VPN is not ready.')
@@ -600,13 +622,14 @@ def serve(args):
                     print(f'VPN 服务器：127.0.0.1:{port}。保持此窗口运行；Ctrl+C 停止服务器。', flush=True)
                     try:
                         while guest.get_transport().is_active():
+                            check_stop(stop_event)
                             try: available = guest_route_ready(guest, probe)
                             except (OSError, EOFError, ValueError, paramiko.SSHException): available = False
                             if available: ready.set()
                             else: ready.clear()
                             save(STATE / 'server.json', {'host': '127.0.0.1', 'port': port,
                                 'ready': available, 'updated': time.time()})
-                            time.sleep(3)
+                            service_wait(3, stop_event)
                         raise ValueError('VM SSH connection stopped; VPN server is offline.')
                     finally:
                         ready.clear()

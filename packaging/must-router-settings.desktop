@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=MUST VPN Router Settings
-Name[zh_CN]=MUST VPN Router 设置
-Comment=Configure SSH and Web routing
-Exec=must-router settings
-Icon=preferences-system-network
-Terminal=false
-Categories=Network;Settings;

@@ -1,4 +1,4 @@
-# MUST VPN Router 0.3.1（独立预览版）
+# MUST VPN Router 0.3.2（独立预览版）
 
 在 Windows 或 Linux 的普通终端使用本机 OpenSSH，经独立虚拟机的学校 VPN 访问 AISC。
 这是独立产品：安装 Router 不会升级、卸载或覆盖 MUST VPN VM。
@@ -51,18 +51,20 @@ Include 定义导入的别名，并在 OpenSSH 的 final 阶段匹配配置的�
 不安装 Include 时可直接 `must-router ssh AISC`，仍使用本机 OpenSSH。
 SCP/SFTP 使用相同别名，例如 `sftp AISC`。
 
-后续双击桌面 **MUST VPN Router** 或运行 `must-router serve`，等就绪后在普通终端连接。
+后续双击桌面 **MUST VPN Router**，在主界面点击“启动 VPN”，等就绪后在普通终端连接。
+同一窗口提供 VPN 状态、停止、代理模式及回退设置。关闭窗口后 VPN 继续在后台运行，再次打开会回到同一个控制台。
+“停止 VPN”关闭转发入口并正常关闭由它启动的虚拟机；启动中取消会先等待虚拟机能够正常关机。
+仍可运行 `must-router serve` 使用终端方式。
 Ctrl+C 正常停止服务器，并关闭由它启动的虚拟机；单独运行的 VM 不会因此被关闭。
 服务器未启动或 VPN 未就绪时，AISC 连接立即失败，不会自动开机或反复探测代理端口。
 
 ## 设置
 
-Windows 双击桌面 **MUST VPN Router 设置**，Linux 从应用菜单打开 **MUST VPN Router Settings**，
-即可在本机浏览器中打开可视化设置。也可以运行 `must-router settings`。
-页面提供模式选择、指定域名、学校回退开关、直连等待时间和 SSH 端口；点“保存设置”保存。
-打开设置不需要启动虚拟机。保存后重启 Router，并重新打开分流浏览器。
-点击“关闭设置”退出；直接关闭页面后，设置服务会在两分钟内自动退出。
-设置页只监听随机的本机端口，需要本次启动的访问凭证，不对局域网开放。
+Windows 桌面和 Linux 应用菜单都只提供 **MUST VPN Router** 一个入口。也可以运行 `must-router ui`；`must-router settings` 打开相同主界面。
+本机窗口同时提供 VPN 启动/停止、实时状态，以及模式选择、指定域名、学校回退、直连等待时间和 SSH 端口。
+打开主界面不会自动启动虚拟机。保存后，下次启动使用新规则；正在运行时可点击“重启并应用”。
+使用 Web 代理时，变更后还需重新打开分流浏览器以刷新 PAC。
+VPN 停止后关闭窗口，界面后台服务在两分钟内自动退出。界面只监听随机本机端口，带随机访问凭证，不对局域网开放。
 
 命令行设置仍然可用，`--show` 只打印当前配置：
 

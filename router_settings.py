@@ -1,4 +1,4 @@
-"""Loopback-only graphical settings; opening settings never starts the VM."""
+"""Single local control window: VPN lifecycle and routing settings."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
@@ -7,6 +7,7 @@ import threading
 import time
 import webbrowser
 
+import app
 import routing
 
 
@@ -37,7 +38,7 @@ def form_policy(current, fields):
     return routing.Policy(data)
 
 
-def make_server(state, html, save_policy):
+def make_server(state, html, save_policy, controller=None):
     token = secrets.token_urlsafe(32)
     prefix = '/' + token + '/'
 
@@ -78,12 +79,25 @@ def make_server(state, html, save_policy):
                                         'server_ready':routing.server_endpoint(state) is not None})
                 except (OSError, ValueError): self.response(500, {'error':'无法读取设置，请检查程序数据目录。'})
             elif self.path == prefix + 'api/ping': self.response(200, {'ok':True})
+            elif self.path == prefix + 'api/status' and controller is not None:
+                self.response(200, controller.status())
             else: self.response(404, {'error':'页面不存在。'})
 
         def do_POST(self):
             if not self.allowed(write=True): return
             if self.path == prefix + 'api/close':
+                if controller is not None and controller.active():
+                    self.response(409, {'error':'VPN 正在运行，请先停止 VPN，或直接关闭窗口让 VPN 在后台继续运行。'}); return
                 self.response(200, {'ok':True}); self.server.stopping.set(); return
+            if self.path in (prefix + 'api/start', prefix + 'api/stop', prefix + 'api/restart') and controller is not None:
+                try:
+                    # Only fixed actions are accepted. No shell commands or paths
+                    # can be supplied by the control page.
+                    result = controller.start() if self.path.endswith('/start') else controller.stop(self.path.endswith('/restart'))
+                    self.response(200, result)
+                except (ValueError, OSError) as error: self.response(400, {'error':str(error)})
+                self.close_connection = True
+                return
             if self.path != prefix + 'api/settings':
                 self.response(404, {'error':'页面不存在。'}); return
             try:
@@ -93,8 +107,11 @@ def make_server(state, html, save_policy):
                 with self.server.save_lock:
                     policy = form_policy(routing.Policy.load(state), fields)
                     save_policy(policy)
-                self.response(200, {'ok':True, 'policy':policy.data,
-                    'message':'已保存。请重启 MUST VPN Router，并重新打开分流浏览器，使所有设置生效。'})
+                if controller and controller.active():
+                    message = ('已保存。点击上方“重启并应用”使运行中的 VPN 使用新设置。'
+                               if controller.status()['restart_required'] else '已保存，运行中的 VPN 已使用此设置。')
+                else: message = '已保存，下次启动 VPN 时使用此设置。'
+                self.response(200, {'ok':True, 'policy':policy.data, 'message':message})
             except (ValueError, TypeError, UnicodeError) as error:
                 self.response(400, {'error':str(error)})
             except (OSError, subprocess.SubprocessError):
@@ -111,11 +128,40 @@ def make_server(state, html, save_policy):
     return server
 
 
-def run(state, html, save_policy, open_browser=True):
-    with make_server(state, html, save_policy) as server:
-        print('MUST VPN Router 设置：' + server.url, flush=True)
-        print('关闭页面后，设置服务将在两分钟内自动退出。', flush=True)
-        if open_browser: webbrowser.open(server.url)
-        while not server.stopping.is_set() and time.monotonic() - server.last_activity < 120:
-            server.handle_request()
+def open_window(url, state):
+    browser = app.browser_path()
+    if browser:
+        subprocess.Popen([browser, f'--app={url}', f'--user-data-dir={state / "control-browser-profile"}',
+            '--window-size=1000,940', '--no-first-run', '--disable-extensions'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else: webbrowser.open(url)
+
+
+def run(state, html, save_policy, open_browser=True, controller=None):
+    with open(state / 'ui.lock', 'a+b') as lease:
+        try: routing._lock(lease, True)
+        except OSError:
+            for _ in range(30):
+                try:
+                    url = json.loads((state / 'ui.json').read_text(encoding='utf-8'))['url']
+                    if not url.startswith('http://127.0.0.1:'): raise ValueError('Invalid control window address.')
+                    if open_browser: open_window(url, state)
+                    print('MUST VPN Router：' + url, flush=True)
+                    return 0
+                except (OSError, KeyError, json.JSONDecodeError): time.sleep(0.1)
+            raise ValueError('Router 主界面正在启动，请稍后重试。') from None
+        try:
+            with make_server(state, html, save_policy, controller) as server:
+                app.save(state / 'ui.json', {'url':server.url})
+                print('MUST VPN Router：' + server.url, flush=True)
+                if open_browser: open_window(server.url, state)
+                while not server.stopping.is_set():
+                    if time.monotonic() - server.last_activity >= 120 and not (controller and controller.active()): break
+                    server.handle_request()
+        finally:
+            if controller and controller.active():
+                controller.stop()
+                # Keep the owner alive until guest shutdown completes.
+                while controller.active(): time.sleep(0.2)
+            (state / 'ui.json').unlink(missing_ok=True)
     return 0
