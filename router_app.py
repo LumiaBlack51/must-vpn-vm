@@ -12,7 +12,7 @@ import app
 import local_ssh
 import routing
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 DEFAULT_PORT = 1189
 PROXY_PORT = 1188
 PAC_PORT = 18765
@@ -27,7 +27,10 @@ def state_home():
 
 
 def self_command(command):
-    entry = [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, str(Path(__file__).resolve())]
+    if getattr(sys, 'frozen', False):
+        # The optional Windows GUI launcher lives beside the main executable.
+        entry = [str(Path(sys.executable).with_name('must-router.exe'))] if os.name == 'nt' else [sys.executable]
+    else: entry = [sys.executable, str(Path(__file__).resolve())]
     return entry + ['--home', str(app.STATE), command]
 
 
@@ -61,17 +64,24 @@ def clone_state(source, qemu=None):
 
 
 def settings(arguments):
+    if not arguments or arguments in (['--gui'], ['--no-browser']):
+        import router_settings
+        app.protect_state()
+        def save_policy(policy):
+            app.save(app.STATE / 'routing.json', policy.data)
+            if (app.STATE / 'ssh/targets.json').exists():
+                local_ssh.write_config(app.STATE, proxy_command())
+        return router_settings.run(app.STATE, app.RESOURCES / 'router_settings.html', save_policy,
+                                   open_browser=arguments != ['--no-browser'])
+    if arguments == ['--show']:
+        print(json.dumps(routing.Policy.load(app.STATE).data, indent=2, ensure_ascii=False))
+        return 0
     if arguments:
         sys.argv = [sys.argv[0], 'routing-config', *arguments]
         result = app.main()
         if (app.STATE / 'ssh/targets.json').exists():
             local_ssh.write_config(app.STATE, proxy_command())
         return result
-    print(json.dumps(routing.Policy.load(app.STATE).data, indent=2, ensure_ascii=False))
-    print('模式：ssh = 仅 SSH；all = AISC SSH 和 Web；domains = 仅指定域名。')
-    print('示例：must-router settings --mode ssh')
-    print('示例：must-router settings --mode domains --domain aisc.must.edu.mo')
-    print('修改后重启 serve；普通学校连接回退可用 --fallback on/off 设置。')
 
 
 def proxy_command():
@@ -93,7 +103,8 @@ def main():
         print('MUST VPN Router ' + VERSION)
         print('init --from-state PATH    关闭原虚拟机后创建独立副本')
         print('serve                    启动独立虚拟机、VPN 及本地分流入口')
-        print('settings [--mode ssh|all|domains] [--domain HOST] [--fallback on|off]')
+        print('settings                 打开图形设置页面（无需启动虚拟机）')
+        print('settings --show          在终端查看设置；也支持 --mode / --domain / --fallback')
         print('import-ssh [AISC AISC-CPU] 导入来宾的指定 SSH 配置及密钥到私有目录')
         print('ssh-setup [--install]     生成 SSH 配置；--install 添加独立 Include')
         print('ssh AISC [command...]     用本机 OpenSSH 连接，无需全局 SSH 配置')

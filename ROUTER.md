@@ -1,4 +1,4 @@
-# MUST VPN Router 0.3.0（独立预览版）
+# MUST VPN Router 0.3.1（独立预览版）
 
 在 Windows 或 Linux 的普通终端使用本机 OpenSSH，经独立虚拟机的学校 VPN 访问 AISC。
 这是独立产品：安装 Router 不会升级、卸载或覆盖 MUST VPN VM。
@@ -57,8 +57,17 @@ Ctrl+C 正常停止服务器，并关闭由它启动的虚拟机；单独运行�
 
 ## 设置
 
+Windows 双击桌面 **MUST VPN Router 设置**，Linux 从应用菜单打开 **MUST VPN Router Settings**，
+即可在本机浏览器中打开可视化设置。也可以运行 `must-router settings`。
+页面提供模式选择、指定域名、学校回退开关、直连等待时间和 SSH 端口；点“保存设置”保存。
+打开设置不需要启动虚拟机。保存后重启 Router，并重新打开分流浏览器。
+点击“关闭设置”退出；直接关闭页面后，设置服务会在两分钟内自动退出。
+设置页只监听随机的本机端口，需要本次启动的访问凭证，不对局域网开放。
+
+命令行设置仍然可用，`--show` 只打印当前配置：
+
 ```powershell
-must-router settings
+must-router settings --show
 must-router settings --mode ssh
 must-router settings --mode all
 must-router settings --mode domains --domain aisc.must.edu.mo --domain another.school.example

@@ -10,7 +10,7 @@ slug = 'must-router' if a.router else 'must-vm'
 title = 'MUST VPN Router' if a.router else 'MUST VPN VM'
 ns='http://schemas.microsoft.com/wix/2006/wi';X.register_namespace('',ns)
 def node(parent,tag,**attrs):return X.SubElement(parent,'{'+ns+'}'+tag,attrs)
-root=X.Element('{'+ns+'}Wix');product=node(root,'Product',Id='*',Name=title+' (Preview)',Language='1033',Version='0.3.0' if a.router else '0.2.9',Manufacturer='MUST VM Project',UpgradeCode='BC8FAE54-F7D0-43F9-9042-A86B2770B703' if a.router else '71F289BB-C190-4937-BEB7-0F541BC89105')
+root=X.Element('{'+ns+'}Wix');product=node(root,'Product',Id='*',Name=title+' (Preview)',Language='1033',Codepage='936' if a.router else '1252',Version='0.3.1' if a.router else '0.2.9',Manufacturer='MUST VM Project',UpgradeCode='BC8FAE54-F7D0-43F9-9042-A86B2770B703' if a.router else '71F289BB-C190-4937-BEB7-0F541BC89105')
 node(product,'Package',InstallerVersion='500',Compressed='yes',InstallScope='perUser',Platform='x64')
 node(product,'MajorUpgrade',DowngradeErrorMessage='A newer '+title+' is installed.')
 node(product,'MediaTemplate',EmbedCab='yes',CompressionLevel='medium' if a.router else 'high')
@@ -35,6 +35,15 @@ node(shortcut,'Shortcut',Id='DesktopTerminal',Directory='DesktopFolder',Name='MU
 node(shortcut,'RegistryValue',Root='HKCU',Key='Software\\MUSTVPNRouter' if a.router else 'Software\\MUSTVPNVM',Name='DesktopTerminal',
      Type='integer',Value='1',KeyPath='yes')
 node(feature,'ComponentRef',Id='DesktopShortcutComponent')
+if a.router:
+    settings=node(install,'Component',Id='SettingsShortcutComponent',
+                  Guid=str(uuid.uuid5(uuid.NAMESPACE_URL,slug+'/desktop-settings')),Win64='yes')
+    node(settings,'Shortcut',Id='DesktopSettings',Directory='DesktopFolder',Name='MUST VPN Router 设置',
+         Description='Open visual routing settings without starting the VM',Target='[INSTALLDIR]must-router-settings.exe',
+         WorkingDirectory='INSTALLDIR',Advertise='no')
+    node(settings,'RegistryValue',Root='HKCU',Key='Software\\MUSTVPNRouter',Name='DesktopSettings',
+         Type='integer',Value='1',KeyPath='yes')
+    node(feature,'ComponentRef',Id='SettingsShortcutComponent')
 a.out.parent.mkdir(parents=True,exist_ok=True)
 wxs=a.out.with_suffix('.wxs');wixobj=a.out.with_suffix('.wixobj')
 X.ElementTree(root).write(wxs,encoding='utf-8',xml_declaration=True)

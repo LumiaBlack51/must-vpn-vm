@@ -44,6 +44,12 @@ class RouterSettingsTests(unittest.TestCase):
             command = router_app.self_command('run')
             self.assertEqual(command[-3:], ['--home', str(app.STATE), 'run'])
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows GUI entry point')
+    def test_gui_generated_ssh_uses_main_executable(self):
+        with patch.object(router_app.sys, 'frozen', True, create=True), \
+             patch.object(router_app.sys, 'executable', r'C:\Router\must-router-settings.exe'):
+            self.assertEqual(router_app.self_command('ssh-connect')[0], r'C:\Router\must-router.exe')
+
     def test_import_refuses_running_source_before_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / 'legacy'; target = root / 'router'; source.mkdir()

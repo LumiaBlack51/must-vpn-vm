@@ -11,9 +11,11 @@ else
   (cd gateway && go test ./... && go build -trimpath -ldflags '-s -w' -o ../dist/must-gateway .)
 fi
 "$venv/bin/python" -m unittest discover -s tests -v
-"$venv/bin/pyinstaller" --noconfirm --onedir --distpath dist/linux --workpath build/router-linux --specpath build/router-linux --name must-router --add-data "$PWD/guest:guest" --add-data "$PWD/runtime-lock.json:." "$PWD/router_app.py"
+"$venv/bin/pyinstaller" --noconfirm --onedir --distpath dist/linux --workpath build/router-linux --specpath build/router-linux --name must-router --add-data "$PWD/guest:guest" --add-data "$PWD/runtime-lock.json:." --add-data "$PWD/router_settings.html:." "$PWD/router_app.py"
 stage=$(mktemp -d -t must-router-deb.XXXXXXXX)
 mkdir -p "$stage/opt/must-router" "$stage/usr/bin" "$stage/DEBIAN"
+mkdir -p "$stage/usr/share/applications"
+cp packaging/must-router-settings.desktop "$stage/usr/share/applications/"
 cp -r dist/linux/must-router/. "$stage/opt/must-router/"
 cp dist/must-gateway LICENSE THIRD_PARTY.md README.md ROUTER.md "$stage/opt/must-router/"
 printf '#!/bin/sh\nexec /opt/must-router/must-router "$@"\n' > "$stage/usr/bin/must-router"
@@ -21,7 +23,7 @@ chmod -R u=rwX,go=rX "$stage"
 chmod 755 "$stage" "$stage/DEBIAN" "$stage/usr/bin/must-router" "$stage/opt/must-router/must-router" "$stage/opt/must-router/must-gateway"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: must-vpn-router
-Version: 0.3.0
+Version: 0.3.1
 Section: net
 Priority: optional
 Architecture: amd64
@@ -31,5 +33,5 @@ Description: Independent AISC SSH and Web VPN router (preview)
  Selective forwarding through an isolated VM; coexists with must-vpn-vm.
 EOF
 chmod 644 "$stage/DEBIAN/control"
-dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-router_0.3.0_amd64.deb
+dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-router_0.3.1_amd64.deb
 echo "Build staging retained at $stage"
