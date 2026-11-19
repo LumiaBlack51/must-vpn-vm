@@ -7,4 +7,4 @@ Exec=must-router ui
 TryExec=must-router
 Icon=preferences-system-network
 Terminal=false
-Categories=Network;Settings;
+Categories=Network;

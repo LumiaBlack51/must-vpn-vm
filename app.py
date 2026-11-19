@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import platform
 import select
+import signal
 import shlex
 import shutil
 import socket
@@ -379,7 +380,38 @@ def browser_args(browser, port, portal, spki):
         '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1', '--no-first-run', portal]
 
 
+def linux_browser_pids(profile, proc_root=Path('/proc')):
+    """Match only the main Chromium process for this exact dedicated profile."""
+    pids = []
+    argument = '--user-data-dir=' + str(STATE / profile)
+    for process in proc_root.iterdir():
+        if not process.name.isdigit(): continue
+        try:
+            argv = (process / 'cmdline').read_bytes().decode().split('\0')
+            argv = [a for a in argv if a]
+            # Chromium may replace argv with one joined process title.
+            if len(argv) == 1:
+                parts = argv[0].split(' --')
+                argv = [parts[0], *('--' + part for part in parts[1:])]
+            executable = (process / 'exe').resolve().name
+            if executable in ('brave', 'chrome', 'chromium', 'chromium-browser', 'msedge') \
+                    and argument in argv and not any(a.startswith('--type=') for a in argv):
+                pids.append(int(process.name))
+        except (OSError, UnicodeError): continue
+    return pids
+
+
 def close_isolated_browser(profile='browser-profile'):
+    if sys.platform.startswith('linux'):
+        for pid in linux_browser_pids(profile):
+            try: os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+        deadline = time.monotonic() + 5
+        while linux_browser_pids(profile):
+            if time.monotonic() >= deadline:
+                raise ValueError('The isolated browser is still closing; close it and retry.')
+            time.sleep(0.1)
+        return
     if sys.platform != 'win32': return
     # Chromium reuses an open profile and ignores a new --proxy-server value.
     # Match only processes using this application's dedicated browser profile.

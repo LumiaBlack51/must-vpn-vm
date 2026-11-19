@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,23 @@ class AppTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs['env']['MUST_VM_BROWSER_PROFILE'], str(Path(tmp) / 'browser-profile'))
             self.assertIn('Get-CimInstance Win32_Process', run.call_args.args[0][3])
             self.assertIn('Stop-Process', run.call_args.args[0][3])
+
+    @unittest.skipIf(os.name == 'nt', 'Linux procfs and symlinks')
+    def test_linux_browser_cleanup_matches_exact_profile_and_main_process(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(app, 'STATE', Path(tmp) / 'state'):
+            proc = Path(tmp) / 'proc'; proc.mkdir()
+            expected = '--user-data-dir=' + str(app.STATE / 'browser-profile')
+            for pid, executable, arguments in [
+                    (101, 'brave', [expected]), (102, 'brave', [expected + '-other']),
+                    (103, 'brave', [expected, '--type=renderer']), (104, 'bash', [expected])]:
+                directory = proc / str(pid); directory.mkdir()
+                (directory / 'exe').symlink_to('/opt/browser/' + executable)
+                (directory / 'cmdline').write_bytes(('\0'.join([executable, *arguments]) + '\0').encode())
+            self.assertEqual(app.linux_browser_pids('browser-profile', proc), [101])
+            for pid in (101, 102, 103, 104):
+                path = proc / str(pid) / 'cmdline'
+                path.write_bytes(b' '.join(a for a in path.read_bytes().split(b'\0') if a) + b'\0')
+            self.assertEqual(app.linux_browser_pids('browser-profile', proc), [101])
 
     def test_qemu_has_only_explicit_gateway(self):
         args = app.qemu_args(dict(qemu='qemu', accelerator='tcg', memory=768), '127.0.0.1:1234')
