@@ -8,15 +8,16 @@ import time
 import webbrowser
 
 import app
+import desktop_proxy
 import routing
 
 
 def form_policy(current, fields):
-    allowed = {'traffic_mode', 'proxy_domains', 'fallback', 'direct_timeout', 'ssh_ports'}
+    allowed = {'traffic_mode', 'proxy_domains', 'fallback', 'direct_timeout', 'ssh_ports', 'desktop_web'}
     if not isinstance(fields, dict) or set(fields) - allowed:
         raise ValueError('设置内容无效，请重新打开设置页面。')
     data = {**current.data, **fields}
-    if data['traffic_mode'] not in ('ssh', 'all', 'domains'):
+    if data['traffic_mode'] not in routing.TRAFFIC_MODES:
         raise ValueError('请选择有效的代理模式。')
     domains = data['proxy_domains']
     if not isinstance(domains, list) or len(domains) > 128:
@@ -38,7 +39,7 @@ def form_policy(current, fields):
     return routing.Policy(data)
 
 
-def make_server(state, html, save_policy, controller=None):
+def make_server(state, html, save_policy, controller=None, open_web=None):
     token = secrets.token_urlsafe(32)
     prefix = '/' + token + '/'
 
@@ -76,7 +77,8 @@ def make_server(state, html, save_policy, controller=None):
             elif self.path == prefix + 'api/settings':
                 try:
                     self.response(200, {'policy':routing.Policy.load(state).data,
-                                        'server_ready':routing.server_endpoint(state) is not None})
+                                        'server_ready':routing.server_endpoint(state) is not None,
+                                        'desktop_supported':desktop_proxy.supported()})
                 except (OSError, ValueError): self.response(500, {'error':'无法读取设置，请检查程序数据目录。'})
             elif self.path == prefix + 'api/ping': self.response(200, {'ok':True})
             elif self.path == prefix + 'api/status' and controller is not None:
@@ -97,6 +99,15 @@ def make_server(state, html, save_policy, controller=None):
                     self.response(200, result)
                 except (ValueError, OSError) as error: self.response(400, {'error':str(error)})
                 self.close_connection = True
+                return
+            if self.path == prefix + 'api/web' and open_web is not None:
+                try:
+                    if routing.server_endpoint(state) is None:
+                        raise ValueError('请先启动 VPN，等待连接就绪。')
+                    open_web()
+                    self.response(200, {'ok': True})
+                except (ValueError, OSError) as error:
+                    self.response(400, {'error': str(error)})
                 return
             if self.path != prefix + 'api/settings':
                 self.response(404, {'error':'页面不存在。'}); return
@@ -137,7 +148,7 @@ def open_window(url, state):
     else: webbrowser.open(url)
 
 
-def run(state, html, save_policy, open_browser=True, controller=None):
+def run(state, html, save_policy, open_browser=True, controller=None, open_web=None):
     with open(state / 'ui.lock', 'a+b') as lease:
         try: routing._lock(lease, True)
         except OSError:
@@ -151,7 +162,7 @@ def run(state, html, save_policy, open_browser=True, controller=None):
                 except (OSError, KeyError, json.JSONDecodeError): time.sleep(0.1)
             raise ValueError('Router 主界面正在启动，请稍后重试。') from None
         try:
-            with make_server(state, html, save_policy, controller) as server:
+            with make_server(state, html, save_policy, controller, open_web) as server:
                 app.save(state / 'ui.json', {'url':server.url})
                 print('MUST VPN Router：' + server.url, flush=True)
                 if open_browser: open_window(server.url, state)

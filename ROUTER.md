@@ -1,4 +1,4 @@
-# MUST VPN Router 0.3.2（独立预览版）
+# MUST VPN Router 0.3.3（独立预览版）
 
 在 Windows 或 Linux 的普通终端使用本机 OpenSSH，经独立虚拟机的学校 VPN 访问 AISC。
 这是独立产品：安装 Router 不会升级、卸载或覆盖 MUST VPN VM。
@@ -13,10 +13,28 @@
 | VPN / 分流 SOCKS / PAC 端口 | 1189 / 1188 / 18765 | 1089 / 1088 / 8765 |
 
 Router 使用单独的 MSI UpgradeCode、组件身份、DEB 包名和浏览器配置目录。
-`MUST_ROUTER_HOME` 或 `--home PATH` 可选择 Router 数据目录；不继承 `MUST_VM_HOME`。
-所有入口只监听本机回环地址，不修改系统代理、路由或 Clash。
+`MUST_ROUTER_HOME` 或 `--home PATH` 可选择 Router 数据目录。所有入口只监听本机回环地址。
+GNOME 的普通浏览器接入是可选功能，开启后由 Router 在转发期间管理桌面的 PAC 设置。
 
-## 一次性准备
+## 复用已有 Linux 虚拟机
+
+安装 Router 后，可连接已配置的虚拟机，并只为本机已有的 `aisc` 别名启用代理：
+
+```sh
+must-router reuse-vm --from-state "$HOME/.local/share/MUST-VPN-VM"
+must-router ssh-setup --existing-alias aisc --install
+```
+
+复用方式共享虚拟机磁盘和启动锁，Router 单独保存设置及浏览器配置。原版 VM 已运行时，
+Router 直接接入。已有 VPN 登录仍有效时可立即使用。已有 `ssh aisc` 的用户名、主机名、
+密钥和主机密钥验证由本机 OpenSSH 处理。仅 Web、指定域名或关闭转发时，此别名使用原来的连接方式。
+
+从应用菜单打开 **MUST VPN Router**，选择转发范围并保存，再点击 **启动 VPN**。
+GNOME 用户可以勾选 **接入普通浏览器（GNOME）**。普通浏览器会读取 Router 的 PAC；
+停止转发时恢复之前的桌面设置。GNOME 已启用其他系统代理时，可以单独点击“打开 AISC 网页”，
+使用带有分流规则的独立浏览器窗口。
+
+## 建立独立虚拟机
 
 已配置过原版的 Windows 用户，先在原版执行 `must-vm shutdown`，等虚拟机完全关闭，再运行：
 
@@ -61,7 +79,7 @@ Ctrl+C 正常停止服务器，并关闭由它启动的虚拟机；单独运行�
 ## 设置
 
 Windows 桌面和 Linux 应用菜单都只提供 **MUST VPN Router** 一个入口。也可以运行 `must-router ui`；`must-router settings` 打开相同主界面。
-本机窗口同时提供 VPN 启动/停止、实时状态，以及模式选择、指定域名、学校回退、直连等待时间和 SSH 端口。
+本机窗口提供 VPN 启停、实时状态、转发范围和“打开 AISC 网页”入口。
 打开主界面不会自动启动虚拟机。保存后，下次启动使用新规则；正在运行时可点击“重启并应用”。
 使用 Web 代理时，变更后还需重新打开分流浏览器以刷新 PAC。
 VPN 停止后关闭窗口，界面后台服务在两分钟内自动退出。界面只监听随机本机端口，带随机访问凭证，不对局域网开放。
@@ -81,7 +99,9 @@ must-router settings --fallback on --direct-timeout 4
 
 | 模式 | 行为 |
 | --- | --- |
+| `off` | Web 和 SSH 均使用宿主网络 |
 | `ssh` | 仅 SSH 端口参与 AISC 代理和学校回退；Web 直连 |
+| `web` | 仅 HTTP/HTTPS 端口参与 AISC 代理和学校回退；SSH 直连 |
 | `all`（默认） | AISC 的 SSH 和 Web 经 VPN；其他学校地址直连优先；其他网站直连 |
 | `domains` | 只有指定域名及其子域名经 VPN；其他地址直连，不参与学校回退 |
 
@@ -100,7 +120,7 @@ must-router web
 
 此命令打开独立的 Edge/Chrome/Chromium 配置目录并访问 AISC 登录页。
 其他浏览器若支持 PAC，可手动使用 `http://127.0.0.1:18765/proxy.pac`。
-Web 分流不会自动作用于未配置 PAC 的普通浏览器，也不会接管已有浏览器会话。
+GNOME 下可从主界面为使用桌面代理设置的浏览器启用 PAC。
 
 正常学校流量从宿主网络发出。为了判断失败并回退，学校请求会先进入本机分流器；
 不进入虚拟机。域名和 TCP 错误会触发回退；SSH 还检查服务端识别信息，HTTPS 检查证书有效的
@@ -115,7 +135,7 @@ TLS 握手，HTTP 80 端口用单独的 HEAD 请求检查协议响应。探测�
 
 ## 移除本机 SSH 集成
 
-从用户 `.ssh/config` 删除指向 `.must-vpn-router/ssh/config` 的 Include 即可。
+从用户 `.ssh/config` 删除指向 Router 的 Include 即可。复用现有别名时，其文件名为 `native-<别名>.conf`。
 安装器不删除私有数据；需要清理时先关闭 Router 和虚拟机，再按需保留/删除独立数据目录。
 保留原版不需要恢复虚拟磁盘或卸载 Router。
 

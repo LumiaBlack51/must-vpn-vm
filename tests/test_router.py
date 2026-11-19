@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, MagicMock, patch
 
 import app
+import desktop_proxy
 import local_ssh
 import router_app
 import routing
@@ -32,6 +33,42 @@ class RouterSettingsTests(unittest.TestCase):
         for host in ('aisc.must.edu.mo.evil.example', 'www.must.edu.mo', '10.100.16.8'):
             self.assertEqual(domains.mode(host, 22), 'direct')
         self.assertNotIn('"must.edu.mo"', routing.pac_script(domains, 1188))
+
+    def test_web_only_and_off_leave_ssh_direct(self):
+        data = {'aisc_hosts':['aisc.must.edu.mo'], 'aisc_networks':['10.100.16.13/32'], 'fallback':False}
+        web = routing.Policy({**data, 'traffic_mode':'web'})
+        self.assertEqual(web.mode('aisc.must.edu.mo', 443), 'vpn')
+        self.assertEqual(web.mode('10.100.16.13', 22), 'direct')
+        self.assertNotIn('"must.edu.mo"', routing.pac_script(web, 1188))
+        self.assertFalse(web.aisc_ssh_enabled)
+        off = routing.Policy({**data, 'traffic_mode':'off'})
+        self.assertEqual(off.mode('aisc.must.edu.mo', 443), 'direct')
+        self.assertEqual(off.mode('10.100.16.13', 22), 'direct')
+        self.assertNotIn('SOCKS', routing.pac_script(off, 1188))
+
+    def test_reuse_keeps_the_distinct_runtime_and_router_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, router = root / 'original', root / 'router'
+            source.mkdir()
+            for name in ('disk.qcow2', 'seed.iso', 'id_ed25519', 'host-key.json'):
+                (source / name).write_bytes(b'fixture')
+            app.save(source / 'config.json', {'memory':768})
+            with patch.object(app, 'STATE', router), patch.object(app, 'LINKED_VM_STATE', None):
+                with open(source / 'run.lock', 'a+b') as lease:
+                    lease.write(b'0')
+                    lease.flush()
+                    routing._lock(lease, True)
+                    try: router_app.use_existing_vm(source)
+                    finally: routing._lock(lease, False)
+                link = json.loads((router / 'vm-link.json').read_text())
+                self.assertEqual(Path(link['state']), source.resolve())
+                with patch.object(app, 'LINKED_VM_STATE', source):
+                    self.assertEqual(app.config()['memory'], 768)
+                    self.assertIn(f'file={source / "disk.qcow2"},if=virtio,format=qcow2,discard=unmap',
+                        app.qemu_args({'qemu':'qemu', 'memory':768, 'accelerator':'tcg'}, '127.0.0.1:1234'))
+                self.assertFalse((router / 'disk.qcow2').exists())
+                self.assertFalse((source / 'routing.json').exists())
 
     def test_legacy_environment_does_not_select_router_state(self):
         with patch.dict(os.environ, {'MUST_VM_HOME': '/legacy', 'MUST_ROUTER_HOME': ''}):
@@ -119,6 +156,34 @@ class NativeSshTests(unittest.TestCase):
             self.assertIsNone(local_ssh.install_include(managed, config))
             self.assertEqual(config.read_bytes(), first)
 
+    @unittest.skipIf(os.name == 'nt', 'Requires POSIX shell')
+    def test_existing_alias_preserves_identity_and_disables_the_proxy(self):
+        import shlex
+        import shutil
+        import subprocess
+        ssh = shutil.which('ssh')
+        if not ssh: self.skipTest('OpenSSH unavailable')
+        with tempfile.TemporaryDirectory(prefix='router test ') as tmp:
+            state = Path(tmp)
+            enabled = state / 'enabled'
+            config = local_ssh.write_existing_alias(
+                state, 'aisc', 'must-router ssh-connect', 'test -f ' + shlex.quote(str(enabled)))
+            user = state / 'ssh-config'
+            user.write_text('Include "' + config.as_posix() + '"\n'
+                'Host aisc other\n    HostName 192.0.2.4\n    User fixture\n'
+                '    IdentityFile ~/.ssh/fixture-key\n')
+            def expand(alias):
+                return subprocess.check_output([ssh, '-G', '-F', str(user), alias],
+                                               stderr=subprocess.DEVNULL, text=True)
+            self.assertNotIn('proxycommand must-router', expand('aisc'))
+            enabled.touch()
+            actual = expand('aisc')
+            self.assertIn('proxycommand must-router ssh-connect %h %p', actual)
+            self.assertIn('hostname 192.0.2.4', actual)
+            self.assertIn('user fixture', actual)
+            self.assertIn('identityfile ~/.ssh/fixture-key', actual)
+            self.assertNotIn('proxycommand must-router', expand('other'))
+
     def test_hostkey_verification_and_no_global_host_wildcard(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp); (state / 'ssh').mkdir()
@@ -156,5 +221,32 @@ class NativeSshTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual('proxycommand must-router ssh-connect' in result.stdout, routed)
 
+
+
+class DesktopProxyTests(unittest.TestCase):
+    def test_restore_only_settings_still_owned_by_router(self):
+        url = 'http://127.0.0.1:18765/proxy.pac?1'
+
+        def setting(action, key, value=None):
+            if action == 'get':
+                return settings[key]
+            settings[key] = "'" + value.strip("'") + "'"
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(desktop_proxy, 'supported', return_value=True), \
+             patch.object(desktop_proxy, 'setting', side_effect=setting):
+            state = Path(tmp)
+            previous = {'mode':"'none'", 'autoconfig-url':"'http://previous/pac'"}
+            settings = previous.copy()
+            with desktop_proxy.use_pac(state, url, True):
+                self.assertEqual(settings, {'mode':"'auto'", 'autoconfig-url':repr(url)})
+            self.assertEqual(settings, previous)
+            with desktop_proxy.use_pac(state, url, True):
+                settings.update({'mode':"'auto'", 'autoconfig-url':"'http://other/pac'"})
+            self.assertEqual(settings['autoconfig-url'], "'http://other/pac'")
+            with self.assertRaisesRegex(ValueError, 'GNOME'):
+                with desktop_proxy.use_pac(state, url, True):
+                    self.fail('an existing desktop proxy must be preserved')
+            self.assertFalse((state / 'desktop-proxy.json').exists())
 
 if __name__ == '__main__': unittest.main()

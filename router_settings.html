@@ -10,47 +10,50 @@
 </head>
 <body><main>
 <header class="top"><div class="mark" aria-hidden="true">M</div><div><div class="brand">MUST VPN Router</div><h1>VPN 与连接设置</h1></div><span id="status" class="status">正在读取状态…</span></header>
-<p class="app-caption">本机控制台 · VPN 启停和代理规则都在这里</p>
 <section class="card" aria-label="VPN 控制">
 <div class="service-heading"><span id="service-dot" class="service-dot" aria-hidden="true"></span><h2 id="service-title">正在读取 VPN 状态…</h2></div>
 <p class="hint" id="service-message">打开此窗口不会自动启动虚拟机。</p><p id="service-error" role="alert"></p>
-<div class="controls"><button id="start" type="button" class="primary" disabled>启动 VPN</button><button id="stop" type="button" disabled>停止 VPN</button><button id="restart" type="button" class="hidden">重启并应用</button></div>
-<div class="connection-row"><code>ssh AISC</code><code>ssh AISC-CPU</code><code>ssh AISCCPU</code></div>
-<p class="hint">VPN 就绪后，在本机 PowerShell、CMD 或普通终端中连接。关闭本窗口后，VPN 继续在后台运行。</p>
+<div class="controls"><button id="start" type="button" class="primary" disabled>启动 VPN</button><button id="stop" type="button" disabled>停止 VPN</button><button id="restart" type="button" class="hidden">重启并应用</button><button id="web" type="button" disabled>打开 AISC 网页</button></div>
+<div class="connection-row"><code>ssh aisc</code><code>aisc.must.edu.mo</code></div>
+<p class="hint">关闭此窗口后，已启动的 VPN 继续在后台转发。</p>
 </section>
 <form id="settings">
 <section class="card"><h2>哪些流量经过虚拟机？</h2><div class="choices">
 <label class="option"><input type="radio" name="mode" value="ssh"><span><strong>仅代理 SSH</strong><small>AISC 的 SSH 经过 VPN，网页使用本机正常网络。</small></span></label>
+<label class="option"><input type="radio" name="mode" value="web"><span><strong>仅代理 Web</strong><small>通过 VPN 打开 AISC 网页，SSH 使用本机网络。</small></span></label>
 <label class="option"><input type="radio" name="mode" value="all"><span><strong>AISC 的 SSH 和 Web 都代理</strong><small>AISC 经过 VPN，普通学校网站仍然直连优先。</small></span></label>
+<label class="option"><input type="radio" name="mode" value="off"><span><strong>关闭转发</strong><small>网页和 SSH 都使用本机网络。</small></span></label>
 <label class="option"><input type="radio" name="mode" value="domains"><span><strong>只代理指定域名</strong><small>列表中的域名及其子域名经过 VPN，其他地址直接连接。</small></span></label>
-</div><div id="domains-block" class="domain-block hidden"><label class="field" for="domains">需要代理的域名</label><textarea id="domains" spellcheck="false" placeholder="aisc.must.edu.mo"></textarea><p class="hint">每行一个裸域名，不要填写 https://、路径或 *.。直接使用 IP 的 SSH 别名不匹配域名规则。</p></div></section>
-<section class="card"><h2>学校连接回退</h2><label id="fallback-label" class="switch"><input id="fallback" type="checkbox"><span>直连失败后，尝试通过虚拟机 VPN 连接</span></label><p id="fallback-hint" class="hint">仅在服务器已启动且 VPN 就绪时尝试；仅 SSH 模式不会代理或回退网页。</p><div class="fields"><div><label class="field" for="timeout">直连等待时间（秒）</label><input id="timeout" type="number" min="0.1" max="60" step="0.1" required></div><div><label class="field" for="ports">SSH 端口</label><input id="ports" type="text" inputmode="numeric" placeholder="22" required><p class="hint">多个端口用逗号分隔，例如 22, 2222。</p></div></div><div class="note">网页分流使用 <strong>must-router web</strong> 打开的浏览器，或手动设置了 PAC 的浏览器。运行中修改规则后，点击上方“重启并应用”。仅 SSH 模式下，网页始终使用本机网络。</div></section>
+</div><div id="domains-block" class="domain-block hidden"><label class="field" for="domains">需要代理的域名</label><textarea id="domains" spellcheck="false" placeholder="aisc.must.edu.mo"></textarea><p class="hint">每行一个裸域名。填域名时省略协议、路径和通配符。使用 IP 的 SSH 别名走本机网络。</p></div><div id="desktop-block" class="domain-block hidden"><label class="switch"><input id="desktop-web" type="checkbox"><span>接入普通浏览器（GNOME）</span></label><p class="hint">转发期间，使用桌面代理设置的浏览器会自动按上述规则分流。</p></div></section>
+<section class="card"><h2>学校连接回退</h2><label id="fallback-label" class="switch"><input id="fallback" type="checkbox"><span>直连失败后，尝试通过虚拟机 VPN 连接</span></label><p id="fallback-hint" class="hint">仅在服务器已启动且 VPN 就绪时尝试；仅 SSH 模式不会代理或回退网页。</p><div class="fields"><div><label class="field" for="timeout">直连等待时间（秒）</label><input id="timeout" type="number" min="0.1" max="60" step="0.1" required></div><div><label class="field" for="ports">SSH 端口</label><input id="ports" type="text" inputmode="numeric" placeholder="22" required><p class="hint">多个端口用逗号分隔，例如 22, 2222。</p></div></div><div class="note">运行中修改规则后，点击“重启并应用”。在网页代理模式下，可用“打开 AISC 网页”启动独立分流浏览器。</div></section>
 <div class="footer"><button id="save" class="primary" type="submit" disabled>保存设置</button><button id="reload" type="button">重新读取</button></div><div id="message" role="status" aria-live="polite">正在读取设置…</div>
-</form><p class="privacy">设置只保存在本机的 Router 独立目录，原版 MUST VPN VM 保持独立。</p>
+</form><p class="privacy">代理设置保存在本机。</p>
 </main>
 <script>
 const $=id=>document.getElementById(id), token=location.pathname.split('/')[1];
 let loaded=false, busy=false, actionBusy=false, controlError='';
 function message(text,kind=''){$('message').textContent=text;$('message').className=kind;}
 function mode(){return document.querySelector('input[name="mode"]:checked')?.value;}
-function sync(){const domains=mode()==='domains';$('domains-block').classList.toggle('hidden',!domains);$('fallback').disabled=domains;$('fallback-label').classList.toggle('disabled',domains);$('fallback-hint').textContent=domains?'指定域名模式只处理列表中的地址，不使用学校自动回退。':'仅在服务器已启动且 VPN 就绪时尝试；仅 SSH 模式不会代理或回退网页。';}
+function sync(){const domains=mode()==='domains', off=mode()==='off', web=['web','all','domains'].includes(mode());$('desktop-web').disabled=!web;$('domains-block').classList.toggle('hidden',!domains);$('fallback').disabled=domains||off;$('fallback-label').classList.toggle('disabled',domains||off);$('fallback-hint').textContent=domains?'指定域名模式只处理列表中的地址，不使用学校自动回退。':'仅在服务器已启动且 VPN 就绪时尝试；仅 SSH 模式不会代理或回退网页。';}
 async function api(path,body){const options=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Router-Settings':token},body:JSON.stringify(body)};let response;try{response=await fetch('api/'+path,options);}catch{throw new Error('本机控制台已关闭。请重新打开桌面的 MUST VPN Router。');}const data=await response.json();if(!response.ok)throw new Error(data.error||'操作失败，请重试。');return data;}
-async function load(){try{const data=await api('settings'),p=data.policy;document.querySelector('input[value="'+p.traffic_mode+'"]').checked=true;$('domains').value=p.proxy_domains.join('\n');$('fallback').checked=p.fallback;$('timeout').value=p.direct_timeout;$('ports').value=p.ssh_ports.join(', ');loaded=true;$('save').disabled=false;sync();message('设置已读取。');}catch(e){message(e.message,'error');}}
+async function load(){try{const data=await api('settings'),p=data.policy;document.querySelector('input[value="'+p.traffic_mode+'"]').checked=true;$('domains').value=p.proxy_domains.join('\n');$('desktop-block').classList.toggle('hidden',!data.desktop_supported);$('desktop-web').checked=p.desktop_web;$('fallback').checked=p.fallback;$('timeout').value=p.direct_timeout;$('ports').value=p.ssh_ports.join(', ');loaded=true;$('save').disabled=false;sync();message('设置已读取。');}catch(e){message(e.message,'error');}}
 $('settings').addEventListener('change',event=>{if(event.target.name==='mode')sync();if(loaded)message('有未保存的更改。');});
 $('settings').addEventListener('input',()=>{if(loaded)message('有未保存的更改。');});
-$('settings').addEventListener('submit',async event=>{event.preventDefault();if(!loaded||busy)return;busy=true;$('save').disabled=true;try{const parts=$('ports').value.split(/[,，\s]+/).filter(Boolean);if(!parts.every(p=>/^\d+$/.test(p)))throw new Error('SSH 端口应填写整数，多个端口用逗号分隔。');const data=await api('settings',{traffic_mode:mode(),proxy_domains:$('domains').value.split(/[\n,，]+/).map(s=>s.trim()).filter(Boolean),fallback:$('fallback').checked,direct_timeout:Number($('timeout').value),ssh_ports:parts.map(Number)});message(data.message,'success');}catch(e){message(e.message,'error');}finally{busy=false;$('save').disabled=false;refreshStatus();}});
+$('settings').addEventListener('submit',async event=>{event.preventDefault();if(!loaded||busy)return;busy=true;$('save').disabled=true;try{const parts=$('ports').value.split(/[,，\s]+/).filter(Boolean);if(!parts.every(p=>/^\d+$/.test(p)))throw new Error('SSH 端口应填写整数，多个端口用逗号分隔。');const data=await api('settings',{traffic_mode:mode(),proxy_domains:$('domains').value.split(/[\n,，]+/).map(s=>s.trim()).filter(Boolean),fallback:$('fallback').checked,desktop_web:$('desktop-web').checked,direct_timeout:Number($('timeout').value),ssh_ports:parts.map(Number)});message(data.message,'success');}catch(e){message(e.message,'error');}finally{busy=false;$('save').disabled=false;refreshStatus();}});
 $('reload').addEventListener('click',()=>{if(!busy)load();});
 function showStatus(s){
 const phases={stopped:'VPN 已停止',starting:'正在启动 VPN…',ready:'VPN 已就绪',stopping:'正在停止 VPN…',error:'VPN 启动失败'};
 $('status').textContent=phases[s.phase]||s.phase;$('service-title').textContent=phases[s.phase]||s.phase;
 $('status').classList.toggle('on',s.ready);$('service-dot').className='service-dot'+(s.ready?' on':['starting','stopping'].includes(s.phase)?' pending':'');
 $('service-error').textContent=s.error||controlError;
-$('service-message').textContent=s.phase==='starting'?'正在启动独立虚拟机并连接学校 VPN；如需认证，会自动打开扫码登录窗口。':s.phase==='stopping'?'正在安全停止服务并关闭由 Router 启动的虚拟机；启动中取消会先等待虚拟机可关机。':s.ready?'现在可以直接在本机普通终端使用 SSH。':s.vm_running?'VPN 转发已停止，单独启动的虚拟机仍在运行。':'虚拟机关闭时不会尝试代理，也不会因 SSH 连接自动开机。';
+$('service-message').textContent=s.phase==='starting'?'正在连接虚拟机中的学校 VPN。如需认证，登录窗口会自动打开。':s.phase==='stopping'?'正在安全停止服务并关闭由 Router 启动的虚拟机；启动中取消会先等待虚拟机可关机。':s.ready?'VPN 隧道已连接，转发范围由下方设置决定。':s.vm_running?'VPN 转发已停止，单独启动的虚拟机仍在运行。':'启动 VPN 后开始转发选中的流量。';
+$('web').disabled=!s.ready||!s.web_enabled;
 $('start').disabled=actionBusy||s.managed||s.ready;$('stop').disabled=actionBusy||!s.managed||s.phase==='stopping';
 $('restart').classList.toggle('hidden',!s.restart_required);$('restart').disabled=actionBusy||s.phase==='stopping';
 }
 async function refreshStatus(){try{showStatus(await api('status'));}catch(e){$('service-title').textContent='控制台连接中断';$('service-error').textContent=e.message;}}
 for(const action of ['start','stop','restart'])$(action).addEventListener('click',async()=>{if(actionBusy)return;actionBusy=true;controlError='';try{showStatus(await api(action,{}));}catch(e){controlError=e.message;$('service-error').textContent=e.message;}finally{actionBusy=false;await refreshStatus();}});
+$('web').addEventListener('click',async()=>{try{await api('web',{});}catch(e){$('service-error').textContent=e.message;}});
 setInterval(refreshStatus,2000);
 load();refreshStatus();
 </script></body></html>

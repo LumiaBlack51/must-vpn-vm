@@ -7,12 +7,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 import app
+import desktop_proxy
 import local_ssh
 import routing
 
-VERSION = '0.3.2'
+VERSION = '0.3.3'
 DEFAULT_PORT = 1189
 PROXY_PORT = 1188
 PAC_PORT = 18765
@@ -34,11 +36,27 @@ def self_command(command):
     return entry + ['--home', str(app.STATE), command]
 
 
+def use_existing_vm(source):
+    source = source.expanduser().resolve()
+    if source == app.STATE or app.STATE in source.parents or source in app.STATE.parents:
+        raise ValueError('Router and VM data must use separate directories.')
+    if app.LINKED_VM_STATE == source:
+        return
+    if app.LINKED_VM_STATE is not None or (app.STATE / 'config.json').exists():
+        raise ValueError('Router already has a VM configured.')
+    for name in ('config.json', 'disk.qcow2', 'seed.iso', 'id_ed25519', 'host-key.json'):
+        if not (source / name).is_file():
+            raise ValueError(f'Source VM is missing {name}.')
+    app.protect_state()
+    app.save(app.STATE / 'vm-link.json', {'state': str(source)})
+    print(f'Router will use the existing VM at {source}.')
+
+
 def clone_state(source, qemu=None):
     source = source.expanduser().resolve()
     if source == app.STATE or source in app.STATE.parents or app.STATE in source.parents:
         raise ValueError('The new state directory must be separate from the source.')
-    if (app.STATE / 'disk.qcow2').exists() or (app.STATE / 'config.json').exists():
+    if app.LINKED_VM_STATE is not None or (app.STATE / 'disk.qcow2').exists() or (app.STATE / 'config.json').exists():
         raise ValueError('Router state already exists; existing data is preserved.')
     cfg = json.loads((source / 'config.json').read_text(encoding='utf-8'))
     own_qemu = qemu or (app.ROOT / 'runtime/qemu/qemu-system-x86_64.exe' if os.name == 'nt'
@@ -74,7 +92,8 @@ def settings(arguments):
                 local_ssh.write_config(app.STATE, proxy_command())
         return router_settings.run(app.STATE, app.RESOURCES / 'router_settings.html', save_policy,
                                    open_browser=arguments != ['--no-browser'],
-                                   controller=Controller(app.STATE, lambda event: serve([], event)))
+                                   controller=Controller(app.STATE, lambda event: serve([], event)),
+                                   open_web=open_web)
     if arguments == ['--show']:
         print(json.dumps(routing.Policy.load(app.STATE).data, indent=2, ensure_ascii=False))
         return 0
@@ -87,7 +106,11 @@ def settings(arguments):
 
 
 def proxy_command():
-    command = self_command('ssh-connect')
+    return ssh_proxy_command('ssh-connect')
+
+
+def ssh_proxy_command(name):
+    command = self_command(name)
     text = subprocess.list2cmdline(command) if os.name == 'nt' else shlex.join(command)
     return text.replace('%', '%%')
 
@@ -101,11 +124,25 @@ def serve(arguments, stop_event=None):
     app.protect_state()
     policy = routing.Policy.load(app.STATE)
     router = routing.Router(app.STATE, policy)
+    pac_url = f'http://127.0.0.1:{PAC_PORT}/proxy.pac?{time.time_ns()}'
     with routing.socks_listener(PROXY_PORT, router.connect), \
-         routing.pac_server(PAC_PORT, policy, PROXY_PORT, app.STATE):
+         routing.pac_server(PAC_PORT, policy, PROXY_PORT, app.STATE), \
+         desktop_proxy.use_pac(app.STATE, pac_url, policy.web_enabled and policy.data['desktop_web']):
         print(f'本地分流 SOCKS5：127.0.0.1:{PROXY_PORT}；PAC：http://127.0.0.1:{PAC_PORT}/proxy.pac', flush=True)
         app.serve(options)
     return 0
+
+
+def open_web():
+    browser = app.browser_path()
+    if not browser:
+        raise ValueError('请安装 Chromium、Edge、Chrome 或 Brave。')
+    app.protect_state()
+    app.close_isolated_browser('routed-browser-profile')
+    subprocess.Popen([browser, f'--user-data-dir={app.STATE / "routed-browser-profile"}',
+        f'--proxy-pac-url=http://127.0.0.1:{PAC_PORT}/proxy.pac', '--disable-quic',
+        '--disable-external-intent-requests', '--no-first-run', WEB_URL])
+
 
 
 def main():
@@ -113,6 +150,8 @@ def main():
     global_parser.add_argument('--home', type=Path)
     global_args, args = global_parser.parse_known_args()
     app.STATE = (global_args.home or state_home()).expanduser().resolve()
+    link = app.STATE / 'vm-link.json'
+    app.LINKED_VM_STATE = Path(json.loads(link.read_text(encoding='utf-8'))['state']) if link.exists() else None
     app.self_command = self_command
     # These defaults belong only to this entry point; must-vm keeps its own state.
     routing.DEFAULTS.update(aisc_hosts=['aisc.must.edu.mo'],
@@ -120,7 +159,8 @@ def main():
     if not args or args[0] in ('-h', '--help'):
         print('MUST VPN Router ' + VERSION)
         print('init --from-state PATH    关闭原虚拟机后创建独立副本')
-        print('serve                    启动独立虚拟机、VPN 及本地分流入口')
+        print('reuse-vm --from-state PATH  复用已有虚拟机')
+        print('serve                    启动虚拟机、VPN 及本地分流入口')
         print('ui / settings            打开主界面：VPN 启停、状态和连接设置')
         print('settings --show          在终端查看设置；也支持 --mode / --domain / --fallback')
         print('import-ssh [AISC AISC-CPU] 导入来宾的指定 SSH 配置及密钥到私有目录')
@@ -130,6 +170,11 @@ def main():
         print('其他命令：configure / adapters / run / status / server-status / shutdown / ssh-connect')
         return 0
     command, arguments = args[0], args[1:]
+    if command == 'reuse-vm':
+        parser = argparse.ArgumentParser(prog='must-router reuse-vm')
+        parser.add_argument('--from-state', required=True, type=Path)
+        use_existing_vm(parser.parse_args(arguments).from_state)
+        return 0
     if command == 'init':
         parser = argparse.ArgumentParser(prog='must-router init')
         parser.add_argument('--from-state', required=True, type=Path); parser.add_argument('--qemu', type=Path)
@@ -147,11 +192,17 @@ def main():
         return 0
     if command == 'ssh-setup':
         parser = argparse.ArgumentParser(prog='must-router ssh-setup'); parser.add_argument('--install', action='store_true')
+        parser.add_argument('--existing-alias', help='Use the credentials and HostName from an existing OpenSSH alias')
         options = parser.parse_args(arguments)
-        config = local_ssh.write_config(app.STATE, proxy_command())
+        if options.existing_alias:
+            app.protect_state()
+            config = local_ssh.write_existing_alias(
+                app.STATE, options.existing_alias, proxy_command(), ssh_proxy_command('ssh-enabled'))
+        else:
+            config = local_ssh.write_config(app.STATE, proxy_command())
         if options.install:
             backup = local_ssh.install_include(config, Path.home() / '.ssh/config')
-            print('Native SSH aliases enabled: ssh AISC / ssh AISC-CPU / ssh AISCCPU')
+            print('Native SSH aliases enabled: ' + (options.existing_alias or 'AISC / AISC-CPU / AISCCPU'))
             if backup: print('Previous SSH config backup:', backup)
         else: print('Include "' + config.as_posix() + '"')
         return 0
@@ -161,13 +212,10 @@ def main():
         if not ssh: raise ValueError('Native OpenSSH client is required.')
         config = local_ssh.write_config(app.STATE, proxy_command())
         return subprocess.call([ssh, '-F', str(config), *arguments])
+    if command == 'ssh-enabled':
+        return 0 if routing.Policy.load(app.STATE).aisc_ssh_enabled else 1
     if command == 'web':
-        browser = app.browser_path()
-        if not browser: raise ValueError('Edge/Chrome/Chromium is required.')
-        app.protect_state(); app.close_isolated_browser('routed-browser-profile')
-        subprocess.Popen([browser, f'--user-data-dir={app.STATE / "routed-browser-profile"}',
-            f'--proxy-pac-url=http://127.0.0.1:{PAC_PORT}/proxy.pac', '--disable-quic',
-            '--disable-external-intent-requests', '--no-first-run', WEB_URL])
+        open_web()
         return 0
     if command == 'serve':
         return serve(arguments)

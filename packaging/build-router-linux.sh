@@ -3,6 +3,7 @@ set -eu
 cd "$(dirname "$0")/.."
 python3 -m venv "${BUILD_VENV:-build/router-venv}"
 venv=${BUILD_VENV:-build/router-venv}
+mkdir -p dist
 "$venv/bin/pip" install -r requirements.txt pyinstaller==6.22.3
 if [ -n "${GATEWAY_BINARY:-}" ]; then
   "$GATEWAY_BINARY" -h
@@ -23,7 +24,7 @@ chmod -R u=rwX,go=rX "$stage"
 chmod 755 "$stage" "$stage/DEBIAN" "$stage/usr/bin/must-router" "$stage/opt/must-router/must-router" "$stage/opt/must-router/must-gateway"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: must-vpn-router
-Version: 0.3.2
+Version: 0.3.3
 Section: net
 Priority: optional
 Architecture: amd64
@@ -33,5 +34,5 @@ Description: Independent AISC SSH and Web VPN router (preview)
  Selective forwarding through an isolated VM; coexists with must-vpn-vm.
 EOF
 chmod 644 "$stage/DEBIAN/control"
-dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-router_0.3.2_amd64.deb
+dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-router_0.3.3_amd64.deb
 echo "Build staging retained at $stage"
