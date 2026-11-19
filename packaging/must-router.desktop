@@ -4,6 +4,7 @@ Name=MUST VPN Router
 Name[zh_CN]=MUST VPN Router
 Comment=Control VPN and configure SSH and Web routing
 Exec=must-router ui
+TryExec=must-router
 Icon=preferences-system-network
 Terminal=false
 Categories=Network;Settings;

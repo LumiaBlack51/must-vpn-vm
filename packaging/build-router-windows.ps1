@@ -20,5 +20,5 @@ Copy-Item dist\must-gateway.exe,packaging\router.cmd,README.md,ROUTER.md,LICENSE
 python packaging\stage_runtime.py $QemuSource dist\router-package\must-router\runtime\qemu
 if ($LASTEXITCODE) {throw 'Runtime staging failed'}
 Copy-Item runtime\base.qcow2 dist\router-package\must-router\runtime\base.qcow2
-python packaging\build_msi.py --router --wix $Wix --stage dist\router-package\must-router --out dist\MUST-VPN-Router-0.3.2-x64.msi
+python packaging\build_msi.py --router --wix $Wix --stage dist\router-package\must-router --out dist\MUST-VPN-Router-0.3.3-x64.msi
 if ($LASTEXITCODE) {throw 'MSI build failed'}

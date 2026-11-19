@@ -118,6 +118,22 @@ def write_config(state, command):
     return destination
 
 
+def write_existing_alias(state, alias, command, enabled_command):
+    alias = safe_alias(alias)
+    folder = state / 'ssh'
+    folder.mkdir(exist_ok=True)
+    # Match on the original alias after reading the user's HostName and identity.
+    condition = enabled_command.replace('\\', '\\\\').replace('"', '\\"')
+    path = folder / f'native-{alias}.conf'
+    path.write_text(
+        f'# MUST VPN Router for the existing {alias} alias.\n'
+        f'Match final originalhost {alias} exec "{condition}"\n'
+        f'    ProxyCommand {command} %h %p\n'
+        'Host *\n', encoding='utf-8')
+    protect_ssh(folder)
+    return path
+
+
 def install_include(config, user_config):
     """Only the explicit imported aliases are affected; retain an exact backup."""
     user_config.parent.mkdir(parents=True, exist_ok=True)

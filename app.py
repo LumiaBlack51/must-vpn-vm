@@ -55,6 +55,11 @@ def state_home():
 
 
 STATE = state_home()
+LINKED_VM_STATE = None
+
+
+def vm_state():
+    return LINKED_VM_STATE or STATE
 
 
 def digest(path):
@@ -70,7 +75,7 @@ def save(path, data):
 
 
 def config():
-    return json.loads((STATE / 'config.json').read_text(encoding='utf-8'))
+    return json.loads((vm_state() / 'config.json').read_text(encoding='utf-8'))
 
 
 def protect_state():
@@ -152,6 +157,8 @@ def create_seed(deb, dns):
 
 
 def configure(args):
+    if LINKED_VM_STATE is not None:
+        raise ValueError('This Router is using an existing VM. Configure it with must-vm.')
     if (STATE / 'config.json').exists() or (STATE / 'disk.qcow2').exists():
         raise ValueError('Existing VM state preserved. Use a different MUST_VM_HOME for a new VM.')
     validate_adapter(args.interface, args.source)
@@ -190,16 +197,16 @@ def qemu_args(cfg, ethernet):
     return [cfg['qemu'], '-name', 'MUSTVPN-Isolated', '-machine', 'q35', *acceleration,
         '-m', str(cfg['memory']), '-smp', '1', '-nodefaults', '-display', 'none', '-monitor', 'none',
         '-smbios', 'type=1,manufacturer=MUST-VM,product=MUSTVPN-Isolated,serial=ds=nocloud',
-        '-drive', f'file={escape(STATE / "disk.qcow2")},if=virtio,format=qcow2,discard=unmap',
-        '-drive', f'file={escape(STATE / "seed.iso")},if=virtio,format=raw,readonly=on',
+        '-drive', f'file={escape(vm_state() / "disk.qcow2")},if=virtio,format=qcow2,discard=unmap',
+        '-drive', f'file={escape(vm_state() / "seed.iso")},if=virtio,format=raw,readonly=on',
         '-netdev', f'socket,id=direct,connect={ethernet}',
         '-device', 'virtio-net-pci,netdev=direct,mac=52:54:00:4d:55:53',
-        '-serial', f'file:{STATE / "console.log"}']
+        '-serial', f'file:{vm_state() / "console.log"}']
 
 
 def lock_vm():
     """Hold the launcher lease until this file is closed or the process exits."""
-    lockfile = open(STATE / 'run.lock', 'a+b')
+    lockfile = open(vm_state() / 'run.lock', 'a+b')
     try:
         # Lock before writing: Windows rejects writes into another process's lock.
         routing._lock(lockfile, True)
@@ -212,7 +219,7 @@ def lock_vm():
 def vm_running():
     """A session file may survive a crash; only the OS-held lease proves liveness."""
     try:
-        lockfile = open(STATE / 'run.lock', 'r+b')
+        lockfile = open(vm_state() / 'run.lock', 'r+b')
     except FileNotFoundError:
         return False
     with lockfile:
@@ -223,7 +230,13 @@ def vm_running():
 
 
 def run_vm(_):
-    cfg = config(); validate_adapter(cfg['interface'], cfg['source'])
+    cfg = config()
+    if LINKED_VM_STATE is not None:
+        # A new network may give the same physical adapter a different IPv4.
+        addresses = {a['ip'] for a in adapters() if a['name'] == cfg['interface']}
+        if cfg['source'] not in addresses and len(addresses) == 1:
+            cfg['source'] = addresses.pop()
+    validate_adapter(cfg['interface'], cfg['source'])
     protect_state()
     lockfile = lock_vm()
     gateway = ROOT / ('must-gateway.exe' if os.name == 'nt' else 'must-gateway')
@@ -231,8 +244,8 @@ def run_vm(_):
     children = []
     try:
         # Discard old ports only after exclusively acquiring the launcher lease.
-        (STATE / 'session.json').unlink(missing_ok=True)
-        with open(STATE / 'gateway.log', 'ab') as log:
+        (vm_state() / 'session.json').unlink(missing_ok=True)
+        with open(vm_state() / 'gateway.log', 'ab') as log:
             gw = subprocess.Popen([str(gateway), '--interface', cfg['interface'], '--source', cfg['source']], stdout=subprocess.PIPE, stderr=log)
             children.append(gw)
             line = gw.stdout.readline()
@@ -240,7 +253,7 @@ def run_vm(_):
             ports = json.loads(line)
             vm = subprocess.Popen(qemu_args(cfg, ports['ethernet']), stdout=log, stderr=log)
             children.append(vm)
-            save(STATE / 'session.json', ports)
+            save(vm_state() / 'session.json', ports)
             print('VM running. In another terminal use: must-vm status / install-vpn / start-vpn / browser')
             print('Ctrl+C stops this VM and its gateway; host networking is unchanged.')
             while vm.poll() is None and gw.poll() is None: time.sleep(0.5)
@@ -256,19 +269,19 @@ def run_vm(_):
                 child.terminate()
                 try: child.wait(timeout=8)
                 except subprocess.TimeoutExpired: child.kill(); child.wait()
-        try: (STATE / 'session.json').unlink(missing_ok=True)
+        try: (vm_state() / 'session.json').unlink(missing_ok=True)
         finally: lockfile.close()
 
 
 def connect_guest():
-    ports = json.loads((STATE / 'session.json').read_text())
+    ports = json.loads((vm_state() / 'session.json').read_text())
     host, port = ports['ssh'].split(':'); address = f'[{host}]:{port}'
-    kind, encoded, *_ = json.loads((STATE / 'host-key.json').read_text())['key'].split()
+    kind, encoded, *_ = json.loads((vm_state() / 'host-key.json').read_text())['key'].split()
     key = paramiko.Ed25519Key(data=base64.b64decode(encoded))
     client = paramiko.SSHClient(); client.get_host_keys().add(address, kind, key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
     try:
-        client.connect(host, int(port), username='vpn', key_filename=str(STATE / 'id_ed25519'), timeout=10,
+        client.connect(host, int(port), username='vpn', key_filename=str(vm_state() / 'id_ed25519'), timeout=10,
                        banner_timeout=30, auth_timeout=20, look_for_keys=False, allow_agent=False)
     except BaseException:
         client.close()
@@ -352,7 +365,8 @@ def forward(args):
 def browser_path():
     candidates = ([Path(os.environ.get('PROGRAMFILES(X86)', 'C:/Program Files (x86)')) / 'Microsoft/Edge/Application/msedge.exe',
                    Path(os.environ.get('PROGRAMFILES', 'C:/Program Files')) / 'Google/Chrome/Application/chrome.exe'] if os.name == 'nt'
-                  else [Path(p) for name in ('chromium', 'chromium-browser', 'google-chrome') if (p := shutil.which(name))])
+                  else [Path(p) for name in ('chromium', 'chromium-browser', 'google-chrome', 'brave-browser',
+                                           'microsoft-edge', 'microsoft-edge-stable') if (p := shutil.which(name))])
     return next((str(p) for p in candidates if p.is_file()), None)
 
 
@@ -423,7 +437,8 @@ def self_command(command):
 
 def start_helper(command, log_name, *arguments):
     protect_state()
-    with open(STATE / log_name, 'ab') as log:
+    log_dir = vm_state() if command == 'run' else STATE
+    with open(log_dir / log_name, 'ab') as log:
         return subprocess.Popen([*self_command(command), *arguments], stdout=log, stderr=log,
             env={**os.environ, 'MUST_VM_HOME': str(STATE)},
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
@@ -443,18 +458,18 @@ def wait_for_guest(launcher, timeout=240):
     print('正在启动隔离虚拟机并等待终端连接...', flush=True)
     while time.monotonic() < deadline:
         if launcher is not None and launcher.poll() is not None:
-            raise ValueError(f'VM startup failed; see {STATE / "terminal-vm.log"} and gateway.log.')
+            raise ValueError(f'VM startup failed; see {vm_state() / "terminal-vm.log"} and gateway.log.')
         running = vm_running()
         if launcher is None and not running:
-            raise ValueError(f'VM launcher stopped while waiting for SSH; see {STATE / "terminal-vm.log"} and gateway.log.')
-        if running and (STATE / 'session.json').exists():
+            raise ValueError(f'VM launcher stopped while waiting for SSH; see {vm_state() / "terminal-vm.log"} and gateway.log.')
+        if running and (vm_state() / 'session.json').exists():
             try:
                 with connect_guest(): return
             except (OSError, ValueError, EOFError, paramiko.SSHException) as error:
                 last_error = f'{type(error).__name__}: {error}'
         time.sleep(3)
     raise ValueError(f'VM did not become ready within {timeout} seconds. Last SSH error: {last_error}; '
-                     f'see {STATE / "console.log"} and gateway.log.')
+                     f'see {vm_state() / "console.log"} and gateway.log.')
 
 
 def guest_check(command):
@@ -473,17 +488,17 @@ def vpn_ready(target):
 def pinned_guest_ssh():
     ssh = shutil.which('ssh.exe' if os.name == 'nt' else 'ssh')
     if not ssh: raise ValueError('OpenSSH client is required to open the interactive guest terminal.')
-    ports = json.loads((STATE / 'session.json').read_text())
+    ports = json.loads((vm_state() / 'session.json').read_text())
     host, port = ports['ssh'].split(':')
     if host != '127.0.0.1': raise ValueError('Guest SSH forwarding must be loopback-only.')
-    kind, encoded, *_ = json.loads((STATE / 'host-key.json').read_text())['key'].split()
-    known_hosts = STATE / 'guest_known_hosts'
+    kind, encoded, *_ = json.loads((vm_state() / 'host-key.json').read_text())['key'].split()
+    known_hosts = vm_state() / 'guest_known_hosts'
     known_hosts.write_text(f'[{host}]:{port} {kind} {encoded}\n', encoding='ascii')
     if os.name != 'nt': known_hosts.chmod(0o600)
     null_config = 'NUL' if os.name == 'nt' else '/dev/null'
     return [ssh, '-F', null_config, '-o', 'StrictHostKeyChecking=yes',
         '-o', f'UserKnownHostsFile={known_hosts}', '-o', 'IdentitiesOnly=yes',
-        '-o', 'BatchMode=yes', '-i', str(STATE / 'id_ed25519'), '-p', port,
+        '-o', 'BatchMode=yes', '-i', str(vm_state() / 'id_ed25519'), '-p', port,
         '-tt', 'vpn@127.0.0.1']
 
 
@@ -519,9 +534,10 @@ def ready_vm(probe, need_ssh=False, stop_event=None):
             print('正在虚拟机内安装 SSH 客户端...', flush=True)
             if exec_guest('sudo apt-get update && sudo apt-get install -y --no-install-recommends openssh-client') != 0:
                 raise ValueError('Guest SSH client installation failed.')
-        print('正在启动学校 VPN...', flush=True)
-        check_stop(stop_event)
-        if exec_guest('sudo must-vpn start') != 0: raise ValueError('Guest VPN service failed to start.')
+        if LINKED_VM_STATE is None or not vpn_ready(probe):
+            print('正在启动学校 VPN...', flush=True)
+            check_stop(stop_event)
+            if exec_guest('sudo must-vpn start') != 0: raise ValueError('Guest VPN service failed to start.')
         if not vpn_ready(probe):
             print('等待已保存的登录状态...', flush=True)
             for _ in range(5):
@@ -559,7 +575,7 @@ def ready_vm(probe, need_ssh=False, stop_event=None):
 
 
 def vm_probe(args):
-    print(f'VM state: "{STATE}"', flush=True)
+    print(f'VM state: "{vm_state()}"', flush=True)
     cfg = config(); validate_adapter(cfg['interface'], cfg['source'])
     probe = args.probe or cfg.get('probe', '10.100.16.13')
     if ipaddress.ip_address(probe).version != 4: raise ValueError('VPN probe must be an IPv4 campus address.')
@@ -727,7 +743,7 @@ def main():
                        ('school-host','school_hosts'), ('school-network','school_networks')]:
         c.add_argument('--' + flag, dest=dest, action='append')
     c.add_argument('--fallback', choices=['on','off']); c.add_argument('--direct-timeout', type=float)
-    c.add_argument('--mode', choices=['ssh','all','domains']); c.add_argument('--domain', action='append')
+    c.add_argument('--mode', choices=routing.TRAFFIC_MODES); c.add_argument('--domain', action='append')
     c.add_argument('--ssh-port', type=int, action='append')
     c=sub.add_parser('smart-proxy', help='Local selective proxy; never starts the VM')
     c.add_argument('--port', type=int, default=1088); c.add_argument('--pac-port', type=int, default=8765)

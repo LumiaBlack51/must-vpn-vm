@@ -27,6 +27,7 @@ class Controller:
                      else 'error' if self.error else 'stopped')
             return {'phase':phase, 'ready':ready and not stopping, 'managed':active,
                     'error':self.error, 'vm_running':app.vm_running(),
+                    'web_enabled':bool(self.active_policy and routing.Policy(self.active_policy).web_enabled),
                     'restart_required':active and self.active_policy != routing.Policy.load(self.state).data}
 
     def start(self):
@@ -34,7 +35,7 @@ class Controller:
             if self.active(): return self.status()
             if routing.server_endpoint(self.state) is not None:
                 raise ValueError('Router 已在终端运行，请先在该终端按 Ctrl+C 停止，再从此窗口启动。')
-            if not (self.state / 'config.json').exists():
+            if not (app.vm_state() / 'config.json').exists():
                 raise ValueError('尚未配置 Router 虚拟机，请先按使用说明完成初始化。')
             self.error = ''; self.restart_requested = False
             self.stop_event = threading.Event()

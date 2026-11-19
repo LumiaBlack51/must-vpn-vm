@@ -27,8 +27,10 @@ DEFAULTS = {
     'traffic_mode': 'all',
     'proxy_domains': [],
     'ssh_ports': [22],
+    'desktop_web': False,
 }
 HEARTBEAT_TTL = 12
+TRAFFIC_MODES = ('off', 'ssh', 'web', 'all', 'domains')
 
 
 def hostname(value):
@@ -56,8 +58,9 @@ class Policy:
                 raise ValueError('Guest VPN networks must be IPv4.')
             self.data[key] = [str(n) for n in self.networks[key]]
         if not isinstance(self.data['fallback'], bool): raise ValueError('fallback must be true or false')
-        if self.data['traffic_mode'] not in ('ssh', 'all', 'domains'):
-            raise ValueError('traffic_mode must be ssh, all, or domains.')
+        if not isinstance(self.data['desktop_web'], bool): raise ValueError('desktop_web must be true or false')
+        if self.data['traffic_mode'] not in TRAFFIC_MODES:
+            raise ValueError('Unknown traffic mode.')
         if not isinstance(self.data['ssh_ports'], list) or not all(
                 isinstance(p, int) and 1 <= p <= 65535 for p in self.data['ssh_ports']):
             raise ValueError('ssh_ports must be a list of TCP port numbers.')
@@ -77,10 +80,20 @@ class Policy:
             return host in self.data[group + '_hosts'] or any(ip in n for n in self.networks[group + '_networks'])
         return any(host == h or host.endswith('.' + h) for h in self.data[group + '_hosts'])
 
+    @property
+    def web_enabled(self):
+        return self.data['traffic_mode'] in ('web', 'all', 'domains')
+
+    @property
+    def aisc_ssh_enabled(self):
+        return self.data['traffic_mode'] in ('ssh', 'all')
+
     def mode(self, host, port=22):
         host = hostname(host)
-        if self.data['traffic_mode'] == 'ssh' and port not in self.data['ssh_ports']: return 'direct'
-        if self.data['traffic_mode'] == 'domains':
+        mode = self.data['traffic_mode']
+        if mode == 'off' or (mode == 'web' and port not in (80, 443)): return 'direct'
+        if mode == 'ssh' and port not in self.data['ssh_ports']: return 'direct'
+        if mode == 'domains':
             return 'vpn' if any(host == h or host.endswith('.' + h) for h in self.data['proxy_domains']) else 'direct'
         if self.matches(host, 'aisc'): return 'vpn'
         if self.matches(host, 'school') and self.data['fallback']: return 'fallback'
@@ -321,11 +334,14 @@ def socks_listener(port, connect):
 
 def pac_script(policy, port):
     # Only campus/AISC requests visit the dispatcher. No host DNS lookup in PAC.
-    if policy.data['traffic_mode'] == 'ssh':
+    if not policy.web_enabled:
         return 'function FindProxyForURL(url, host) { return "DIRECT"; }\n'
     domains_only = policy.data['traffic_mode'] == 'domains'
-    hosts = policy.data['proxy_domains'] if domains_only else policy.data['aisc_hosts'] + policy.data['school_hosts']
-    networks = [] if domains_only else [n for group in policy.networks.values() for n in group]
+    hosts = policy.data['proxy_domains'] if domains_only else list(policy.data['aisc_hosts'])
+    networks = [] if domains_only else list(policy.networks['aisc_networks'])
+    if not domains_only and policy.data['fallback']:
+        hosts += policy.data['school_hosts']
+        networks += policy.networks['school_networks']
     return '''function FindProxyForURL(url, host) {
   host = host.toLowerCase().replace(/\\.$/, "");
   var groups = %s;
@@ -349,7 +365,7 @@ def pac_script(policy, port):
 def pac_server(port, policy, socks_port, state):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == '/proxy.pac':
+            if self.path.partition('?')[0] == '/proxy.pac':
                 body, kind = pac_script(policy, socks_port).encode(), 'application/x-ns-proxy-autoconfig'
             elif self.path == '/status':
                 body = json.dumps({'server_ready': server_endpoint(state) is not None, 'policy': policy.data}).encode()
