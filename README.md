@@ -1,6 +1,6 @@
 # MUST VPN VM — 开发预览版
 
-**[MUST VPN Router 0.3.3](ROUTER.md)** 支持宿主机的 `ssh aisc` 和 AISC 网页分流。
+**[MUST VPN Router 0.3.4](ROUTER.md)** 支持宿主机的 `ssh aisc` 和 AISC 网页分流。
 可复用已经配置的虚拟机，也可创建独立虚拟机。新 MSI/DEB 与原版并存。
 下文是原版 `must-vm` 的使用说明。
 桌面只保留 **MUST VPN Router** 一个入口，VPN 启停、实时状态与代理设置位于同一主界面。

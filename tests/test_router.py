@@ -3,7 +3,9 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, MagicMock, patch
 
@@ -183,6 +185,50 @@ class NativeSshTests(unittest.TestCase):
             self.assertIn('user fixture', actual)
             self.assertIn('identityfile ~/.ssh/fixture-key', actual)
             self.assertNotIn('proxycommand must-router', expand('other'))
+
+    @unittest.skipIf(os.name == 'nt', 'Requires POSIX shell')
+    def test_existing_targets_use_native_direct_ssh_until_vpn_is_ready(self):
+        import shlex
+        import shutil
+        import subprocess
+        ssh = shutil.which('ssh')
+        if not ssh:
+            self.skipTest('OpenSSH unavailable')
+        hosts = ['10.100.16.13', '10.100.16.8']
+        with tempfile.TemporaryDirectory(prefix='router test ') as tmp:
+            state = Path(tmp)
+            enabled = shlex.join([sys.executable, str(Path(router_app.__file__).resolve()),
+                                  '--home', str(state), 'ssh-enabled']).replace('%', '%%')
+            config = local_ssh.write_existing_hosts(state, hosts, 'must-router ssh-connect', enabled)
+            user = state / 'ssh-config'
+            user.write_text(f'Include "{config.as_posix()}"\n'
+                'Host aisc\n    HostName 10.100.16.13\n    User fixture\n'
+                '    IdentityFile ~/.ssh/fixture-key\n'
+                'Host cpu\n    HostName 10.100.16.8\n',
+                encoding='utf-8')
+
+            def expand(target, *options):
+                return subprocess.check_output([ssh, '-G', '-F', str(user), *options, target],
+                                               stderr=subprocess.DEVNULL, text=True)
+
+            proxy = 'proxycommand must-router ssh-connect %h %p'
+            heartbeat = {'host':'127.0.0.1', 'port':1189, 'ready':True, 'updated':time.time()}
+            app.save(state / 'server.json', heartbeat)
+            self.assertNotIn(proxy, expand('aisc'))  # A leftover status file is insufficient.
+            with routing.server_lease(state):
+                for target in ['aisc', 'cpu', *hosts]:
+                    self.assertIn(proxy, expand(target))
+                alias = expand('aisc')
+                self.assertIn('user fixture', alias)
+                self.assertIn('identityfile ~/.ssh/fixture-key', alias)
+                self.assertNotIn(proxy, expand('10.100.16.9'))
+                self.assertNotIn(proxy, expand('aisc', '-p', '2222'))
+                app.save(state / 'routing.json', {'traffic_mode':'web'})
+                self.assertNotIn(proxy, expand('aisc'))
+                app.save(state / 'routing.json', {'traffic_mode':'ssh'})
+                self.assertIn(proxy, expand('aisc'))
+                app.save(state / 'server.json', {**heartbeat, 'updated':time.time()-60})
+                self.assertNotIn(proxy, expand('aisc'))
 
     def test_hostkey_verification_and_no_global_host_wildcard(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,7 +14,7 @@ import desktop_proxy
 import local_ssh
 import routing
 
-VERSION = '0.3.3'
+VERSION = '0.3.4'
 DEFAULT_PORT = 1189
 PROXY_PORT = 1188
 PAC_PORT = 18765
@@ -144,6 +144,16 @@ def open_web():
         '--disable-external-intent-requests', '--no-first-run', WEB_URL])
 
 
+def native_ssh_ready(host=None, port=None):
+    policy = routing.Policy.load(app.STATE)
+    if not policy.aisc_ssh_enabled:
+        return False
+    if host is not None and not policy.matches(routing.hostname(host), 'aisc'):
+        return False
+    if port is not None and port not in policy.data['ssh_ports']:
+        return False
+    return routing.server_endpoint(app.STATE) is not None
+
 
 def main():
     global_parser = argparse.ArgumentParser(add_help=False)
@@ -164,7 +174,7 @@ def main():
         print('ui / settings            打开主界面：VPN 启停、状态和连接设置')
         print('settings --show          在终端查看设置；也支持 --mode / --domain / --fallback')
         print('import-ssh [AISC AISC-CPU] 导入来宾的指定 SSH 配置及密钥到私有目录')
-        print('ssh-setup [--install]     生成 SSH 配置；--install 添加独立 Include')
+        print('ssh-setup [--install]     生成 SSH 配置；--existing-host IP 匹配目标及其已有别名')
         print('ssh AISC [command...]     用本机 OpenSSH 连接，无需全局 SSH 配置')
         print('web                      打开使用分流规则的独立浏览器')
         print('其他命令：configure / adapters / run / status / server-status / shutdown / ssh-connect')
@@ -191,18 +201,33 @@ def main():
         print(f'Imported {len(targets)} SSH targets into {config}. Private keys are local only.')
         return 0
     if command == 'ssh-setup':
-        parser = argparse.ArgumentParser(prog='must-router ssh-setup'); parser.add_argument('--install', action='store_true')
-        parser.add_argument('--existing-alias', help='Use the credentials and HostName from an existing OpenSSH alias')
+        parser = argparse.ArgumentParser(prog='must-router ssh-setup')
+        parser.add_argument('--install', action='store_true')
+        existing = parser.add_mutually_exclusive_group()
+        existing.add_argument('--existing-alias', help='Use one existing OpenSSH alias')
+        existing.add_argument('--existing-host', action='append', metavar='HOST',
+                              help='Use existing OpenSSH config for aliases and connections to this AISC host')
         options = parser.parse_args(arguments)
-        if options.existing_alias:
+        enabled_command = ssh_proxy_command('ssh-enabled')
+        if options.existing_host:
+            policy = routing.Policy.load(app.STATE)
+            if not all(policy.matches(routing.hostname(host), 'aisc') for host in options.existing_host):
+                raise ValueError('Existing SSH hosts must be included in the AISC routing scope.')
+            app.protect_state()
+            config = local_ssh.write_existing_hosts(
+                app.STATE, options.existing_host, proxy_command(), enabled_command)
+            targets = ', '.join(options.existing_host)
+        elif options.existing_alias:
             app.protect_state()
             config = local_ssh.write_existing_alias(
-                app.STATE, options.existing_alias, proxy_command(), ssh_proxy_command('ssh-enabled'))
+                app.STATE, options.existing_alias, proxy_command(), enabled_command)
+            targets = options.existing_alias
         else:
             config = local_ssh.write_config(app.STATE, proxy_command())
+            targets = 'AISC / AISC-CPU / AISCCPU'
         if options.install:
             backup = local_ssh.install_include(config, Path.home() / '.ssh/config')
-            print('Native SSH aliases enabled: ' + (options.existing_alias or 'AISC / AISC-CPU / AISCCPU'))
+            print('Native SSH targets enabled: ' + targets)
             if backup: print('Previous SSH config backup:', backup)
         else: print('Include "' + config.as_posix() + '"')
         return 0
@@ -213,7 +238,11 @@ def main():
         config = local_ssh.write_config(app.STATE, proxy_command())
         return subprocess.call([ssh, '-F', str(config), *arguments])
     if command == 'ssh-enabled':
-        return 0 if routing.Policy.load(app.STATE).aisc_ssh_enabled else 1
+        parser = argparse.ArgumentParser(prog='must-router ssh-enabled')
+        parser.add_argument('host', nargs='?')
+        parser.add_argument('port', nargs='?', type=int)
+        options = parser.parse_args(arguments)
+        return 0 if native_ssh_ready(options.host, options.port) else 1
     if command == 'web':
         open_web()
         return 0
