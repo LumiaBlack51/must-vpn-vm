@@ -24,7 +24,7 @@ chmod -R u=rwX,go=rX "$stage"
 chmod 755 "$stage" "$stage/DEBIAN" "$stage/usr/bin/must-router" "$stage/opt/must-router/must-router" "$stage/opt/must-router/must-gateway"
 cat > "$stage/DEBIAN/control" <<'EOF'
 Package: must-vpn-router
-Version: 0.3.3
+Version: 0.3.4
 Section: net
 Priority: optional
 Architecture: amd64
@@ -34,5 +34,5 @@ Description: Independent AISC SSH and Web VPN router (preview)
  Selective forwarding through an isolated VM; coexists with must-vpn-vm.
 EOF
 chmod 644 "$stage/DEBIAN/control"
-dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-router_0.3.3_amd64.deb
+dpkg-deb --build --root-owner-group "$stage" dist/must-vpn-router_0.3.4_amd64.deb
 echo "Build staging retained at $stage"

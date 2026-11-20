@@ -1,4 +1,4 @@
-# MUST VPN Router 0.3.3（独立预览版）
+# MUST VPN Router 0.3.4（独立预览版）
 
 在 Windows 或 Linux 的普通终端使用本机 OpenSSH，经独立虚拟机的学校 VPN 访问 AISC。
 这是独立产品：安装 Router 不会升级、卸载或覆盖 MUST VPN VM。
@@ -18,16 +18,20 @@ GNOME 的普通浏览器接入是可选功能，开启后由 Router 在转发期
 
 ## 复用已有 Linux 虚拟机
 
-安装 Router 后，可连接已配置的虚拟机，并只为本机已有的 `aisc` 别名启用代理：
+安装 Router 后，可复用已配置的虚拟机，并为两个 AISC SSH 目标接入本机 OpenSSH：
 
 ```sh
 must-router reuse-vm --from-state "$HOME/.local/share/MUST-VPN-VM"
-must-router ssh-setup --existing-alias aisc --install
+must-router ssh-setup --existing-host 10.100.16.13 --existing-host 10.100.16.8 --install
 ```
 
 复用方式共享虚拟机磁盘和启动锁，Router 单独保存设置及浏览器配置。原版 VM 已运行时，
-Router 直接接入。已有 VPN 登录仍有效时可立即使用。已有 `ssh aisc` 的用户名、主机名、
-密钥和主机密钥验证由本机 OpenSSH 处理。仅 Web、指定域名或关闭转发时，此别名使用原来的连接方式。
+Router 直接接入。已有 VPN 登录仍有效时可立即使用。
+
+VPN 就绪且选择了 SSH 转发时，直接使用两个 IP 或任何指向它们的本机 OpenSSH 别名
+都会代理配置的 SSH 端口（默认 22）。用户名、密钥和主机密钥验证仍由本机 OpenSSH 处理。
+VPN 停止、尚未就绪或关闭 SSH 转发时，使用原来的 SSH 连接方式，可在校园网直接连接。
+若从 0.3.3 的单别名接入迁移，可从 `~/.ssh/config` 删除旧的 `native-aisc.conf` Include。
 
 从应用菜单打开 **MUST VPN Router**，选择转发范围并保存，再点击 **启动 VPN**。
 GNOME 用户可以勾选 **接入普通浏览器（GNOME）**。普通浏览器会读取 Router 的 PAC；
@@ -135,7 +139,7 @@ TLS 握手，HTTP 80 端口用单独的 HEAD 请求检查协议响应。探测�
 
 ## 移除本机 SSH 集成
 
-从用户 `.ssh/config` 删除指向 Router 的 Include 即可。复用现有别名时，其文件名为 `native-<别名>.conf`。
+从用户 `.ssh/config` 删除指向 Router 的 Include 即可。现有目标使用 `native-hosts.conf`；单别名使用 `native-<别名>.conf`。
 安装器不删除私有数据；需要清理时先关闭 Router 和虚拟机，再按需保留/删除独立数据目录。
 保留原版不需要恢复虚拟磁盘或卸载 Router。
 

@@ -120,14 +120,27 @@ def write_config(state, command):
 
 def write_existing_alias(state, alias, command, enabled_command):
     alias = safe_alias(alias)
+    return write_native_config(state, f'native-{alias}.conf', f'originalhost {alias}',
+                               command, enabled_command)
+
+
+def write_existing_hosts(state, hosts, command, enabled_command):
+    targets = sorted({routing.hostname(host) for host in hosts})
+    if not targets:
+        raise ValueError('At least one existing SSH host is required.')
+    return write_native_config(state, 'native-hosts.conf', 'host ' + ','.join(targets),
+                               command, enabled_command + ' %h %p')
+
+
+def write_native_config(state, filename, match, command, enabled_command):
     folder = state / 'ssh'
     folder.mkdir(exist_ok=True)
-    # Match on the original alias after reading the user's HostName and identity.
+    # The final pass sees the user's resolved HostName and port.
     condition = enabled_command.replace('\\', '\\\\').replace('"', '\\"')
-    path = folder / f'native-{alias}.conf'
+    path = folder / filename
     path.write_text(
-        f'# MUST VPN Router for the existing {alias} alias.\n'
-        f'Match final originalhost {alias} exec "{condition}"\n'
+        '# MUST VPN Router for existing OpenSSH config.\n'
+        f'Match final {match} exec "{condition}"\n'
         f'    ProxyCommand {command} %h %p\n'
         'Host *\n', encoding='utf-8')
     protect_ssh(folder)
@@ -135,7 +148,7 @@ def write_existing_alias(state, alias, command, enabled_command):
 
 
 def install_include(config, user_config):
-    """Only the explicit imported aliases are affected; retain an exact backup."""
+    """Include the Router config and retain an exact backup."""
     user_config.parent.mkdir(parents=True, exist_ok=True)
     content = user_config.read_bytes() if user_config.exists() else b''
     include = ('Include "' + config.as_posix() + '"').encode('utf-8')
